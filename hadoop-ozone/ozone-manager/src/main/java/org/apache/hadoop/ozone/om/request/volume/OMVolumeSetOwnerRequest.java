@@ -62,10 +62,32 @@ public class OMVolumeSetOwnerRequest extends OMVolumeRequest {
   @Override
   public OMRequest preExecute(OzoneManager ozoneManager) throws IOException {
 
+    super.preExecute(ozoneManager);
+
     long modificationTime = Time.now();
     SetVolumePropertyRequest.Builder setPropertyRequestBuilder = getOmRequest()
         .getSetVolumePropertyRequest().toBuilder()
         .setModificationTime(modificationTime);
+    SetVolumePropertyRequest setVolumePropertyRequest =
+        getOmRequest().getSetVolumePropertyRequest();
+
+    String volume = setVolumePropertyRequest.getVolumeName();
+    String newOwner = setVolumePropertyRequest.getOwnerName();
+    Map<String, String> auditMap = buildVolumeAuditMap(volume);
+    auditMap.put(OzoneConsts.OWNER, newOwner);
+
+    // ACL check during preExecute
+    if (ozoneManager.getAclsEnabled()) {
+      try {
+        checkAcls(ozoneManager, OzoneObj.ResourceType.VOLUME,
+            OzoneObj.StoreType.OZONE, IAccessAuthorizer.ACLType.WRITE_ACL,
+            volume, null, null);
+      } catch (IOException ex) {
+        markForAudit(ozoneManager.getAuditLogger(), buildAuditMessage(OMAction.SET_OWNER, auditMap,
+            ex, getOmRequest().getUserInfo()));
+        throw ex;
+      }
+    }
 
     return getOmRequest().toBuilder()
         .setSetVolumePropertyRequest(setPropertyRequestBuilder)
@@ -109,11 +131,11 @@ public class OMVolumeSetOwnerRequest extends OMVolumeRequest {
     OMClientResponse omClientResponse = null;
     try {
       // check Acl
-      if (ozoneManager.getAclsEnabled()) {
-        checkAcls(ozoneManager, OzoneObj.ResourceType.VOLUME,
-            OzoneObj.StoreType.OZONE, IAccessAuthorizer.ACLType.WRITE_ACL,
-            volume, null, null);
-      }
+//      if (ozoneManager.getAclsEnabled()) {
+//        checkAcls(ozoneManager, OzoneObj.ResourceType.VOLUME,
+//            OzoneObj.StoreType.OZONE, IAccessAuthorizer.ACLType.WRITE_ACL,
+//            volume, null, null);
+//      }
 
       long maxUserVolumeCount = ozoneManager.getMaxUserVolumeCount();
       OzoneManagerStorageProtos.PersistedUserVolumeInfo oldOwnerVolumeList;

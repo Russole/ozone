@@ -64,10 +64,32 @@ public class OMVolumeSetQuotaRequest extends OMVolumeRequest {
   @Override
   public OMRequest preExecute(OzoneManager ozoneManager) throws IOException {
 
+    super.preExecute(ozoneManager);
+
     long modificationTime = Time.now();
     SetVolumePropertyRequest.Builder setPropertyRequestBuilde = getOmRequest()
         .getSetVolumePropertyRequest().toBuilder()
         .setModificationTime(modificationTime);
+    SetVolumePropertyRequest setVolumePropertyRequest =
+        getOmRequest().getSetVolumePropertyRequest();
+
+    String volume = setVolumePropertyRequest.getVolumeName();
+    Map<String, String> auditMap = buildVolumeAuditMap(volume);
+    auditMap.put(OzoneConsts.QUOTA_IN_BYTES,
+        String.valueOf(setVolumePropertyRequest.getQuotaInBytes()));
+
+    // ACL check during preExecute
+    if (ozoneManager.getAclsEnabled()) {
+      try {
+        checkAcls(ozoneManager, OzoneObj.ResourceType.VOLUME,
+            OzoneObj.StoreType.OZONE, IAccessAuthorizer.ACLType.WRITE, volume,
+            null, null);
+      } catch (IOException ex) {
+        markForAudit(ozoneManager.getAuditLogger(), buildAuditMessage(OMAction.SET_QUOTA, auditMap,
+            ex, getOmRequest().getUserInfo()));
+        throw ex;
+      }
+    }
 
     return getOmRequest().toBuilder()
         .setSetVolumePropertyRequest(setPropertyRequestBuilde)
@@ -110,11 +132,11 @@ public class OMVolumeSetQuotaRequest extends OMVolumeRequest {
     OMClientResponse omClientResponse = null;
     try {
       // check Acl
-      if (ozoneManager.getAclsEnabled()) {
-        checkAcls(ozoneManager, OzoneObj.ResourceType.VOLUME,
-            OzoneObj.StoreType.OZONE, IAccessAuthorizer.ACLType.WRITE, volume,
-            null, null);
-      }
+//      if (ozoneManager.getAclsEnabled()) {
+//        checkAcls(ozoneManager, OzoneObj.ResourceType.VOLUME,
+//            OzoneObj.StoreType.OZONE, IAccessAuthorizer.ACLType.WRITE, volume,
+//            null, null);
+//      }
 
       mergeOmLockDetails(omMetadataManager.getLock().acquireWriteLock(
           VOLUME_LOCK, volume));
