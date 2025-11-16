@@ -319,16 +319,18 @@ public class BlockOutputStreamEntryPool implements KeyMetadataAware {
       long length = getKeyLength();
       Preconditions.checkArgument(offset == length,
           "Expected offset: " + offset + " expected len: " + length);
-      keyArgs.setDataSize(length);
-      keyArgs.setLocationInfoList(getLocationInfoList());
+      OmKeyArgs updatedKeyArgs = keyArgs.toBuilder()
+          .setDataSize(length)
+          .setLocationInfoList(getLocationInfoList())
+          .build();
       // When the key is multipart upload part file upload, we should not
       // commit the key, as this is not an actual key, this is a just a
       // partial key of a large file.
-      if (keyArgs.getIsMultipartKey()) {
+      if (updatedKeyArgs.getIsMultipartKey()) {
         commitUploadPartInfo =
-            omClient.commitMultipartUploadPart(keyArgs, openID);
+            omClient.commitMultipartUploadPart(updatedKeyArgs, openID);
       } else {
-        omClient.commitKey(keyArgs, openID);
+        omClient.commitKey(updatedKeyArgs, openID);
       }
     } else {
       LOG.warn("Closing KeyOutputStream, but key args is null");
@@ -338,23 +340,25 @@ public class BlockOutputStreamEntryPool implements KeyMetadataAware {
   void hsyncKey(long offset) throws IOException {
     if (keyArgs != null) {
       // in test, this could be null
-      keyArgs.setDataSize(offset);
-      keyArgs.setLocationInfoList(getLocationInfoList());
+      OmKeyArgs updatedKeyArgs = keyArgs.toBuilder()
+          .setDataSize(offset)
+          .setLocationInfoList(getLocationInfoList())
+          .build();
       // When the key is multipart upload part file upload, we should not
       // commit the key, as this is not an actual key, this is a just a
       // partial key of a large file.
-      if (keyArgs.getIsMultipartKey()) {
+      if (updatedKeyArgs.getIsMultipartKey()) {
         throw new IOException("Hsync is unsupported for multipart keys.");
       } else {
-        if (keyArgs.getLocationInfoList().isEmpty()) {
+        if (updatedKeyArgs.getLocationInfoList().isEmpty()) {
           MetricUtil.captureLatencyNs(clientMetrics::addOMHsyncLatency,
-              () -> omClient.hsyncKey(keyArgs, openID));
+              () -> omClient.hsyncKey(updatedKeyArgs, openID));
         } else {
-          ContainerBlockID lastBLockId = keyArgs.getLocationInfoList().get(keyArgs.getLocationInfoList().size() - 1)
+          ContainerBlockID lastBLockId = updatedKeyArgs.getLocationInfoList().get(updatedKeyArgs.getLocationInfoList().size() - 1)
               .getBlockID().getContainerBlockID();
           if (!lastUpdatedBlockId.equals(lastBLockId)) {
             MetricUtil.captureLatencyNs(clientMetrics::addOMHsyncLatency,
-                () -> omClient.hsyncKey(keyArgs, openID));
+                () -> omClient.hsyncKey(updatedKeyArgs, openID));
             lastUpdatedBlockId = lastBLockId;
           }
         }

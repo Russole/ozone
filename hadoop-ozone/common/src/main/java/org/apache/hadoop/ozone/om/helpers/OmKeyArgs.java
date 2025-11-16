@@ -20,6 +20,7 @@ package org.apache.hadoop.ozone.om.helpers;
 import com.google.common.annotations.VisibleForTesting;
 import jakarta.annotation.Nonnull;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -40,9 +41,9 @@ public final class OmKeyArgs implements Auditable {
   private final String bucketName;
   private final String keyName;
   private final String ownerName;
-  private long dataSize;
+  private final long dataSize;
   private final ReplicationConfig replicationConfig;
-  private List<OmKeyLocationInfo> locationInfoList;
+  private final List<OmKeyLocationInfo> locationInfoList;
   private final boolean isMultipartKey;
   private final String multipartUploadID;
   private final int multipartUploadPartNumber;
@@ -60,7 +61,7 @@ public final class OmKeyArgs implements Auditable {
   // generation unchanged.
   // This allows a key to be created an committed atomically if the original has not
   // been modified.
-  private Long expectedDataGeneration = null;
+  private final Long expectedDataGeneration;
 
   private OmKeyArgs(Builder b) {
     this.volumeName = b.volumeName;
@@ -68,12 +69,16 @@ public final class OmKeyArgs implements Auditable {
     this.keyName = b.keyName;
     this.dataSize = b.dataSize;
     this.replicationConfig = b.replicationConfig;
-    this.locationInfoList = b.locationInfoList;
+    this.locationInfoList = b.locationInfoList == null
+        ? Collections.emptyList()
+        : Collections.unmodifiableList(new ArrayList<>(b.locationInfoList));
     this.isMultipartKey = b.isMultipartKey;
     this.multipartUploadID = b.multipartUploadID;
     this.multipartUploadPartNumber = b.multipartUploadPartNumber;
     this.metadata = b.metadata;
-    this.acls = b.acls;
+    this.acls = b.acls == null
+        ? Collections.emptyList()
+        : Collections.unmodifiableList(new ArrayList<>(b.acls));
     this.sortDatanodesInPipeline = b.sortDatanodesInPipeline;
     this.latestVersionLocation = b.latestVersionLocation;
     this.recursive = b.recursive;
@@ -124,16 +129,8 @@ public final class OmKeyArgs implements Auditable {
     return dataSize;
   }
 
-  public void setDataSize(long size) {
-    dataSize = size;
-  }
-
   public Map<String, String> getMetadata() {
     return metadata;
-  }
-
-  public void setLocationInfoList(List<OmKeyLocationInfo> locationInfoList) {
-    this.locationInfoList = locationInfoList;
   }
 
   public List<OmKeyLocationInfo> getLocationInfoList() {
@@ -180,14 +177,6 @@ public final class OmKeyArgs implements Auditable {
         (this.replicationConfig != null) ?
             this.replicationConfig.toString() : null);
     return auditMap;
-  }
-
-  @VisibleForTesting
-  public void addLocationInfo(OmKeyLocationInfo locationInfo) {
-    if (this.locationInfoList == null) {
-      locationInfoList = new ArrayList<>();
-    }
-    locationInfoList.add(locationInfo);
   }
 
   public OmKeyArgs.Builder toBuilder() {
