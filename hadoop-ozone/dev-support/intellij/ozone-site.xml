@@ -96,4 +96,14 @@
     <name>ozone.metastore.rocksdb.statistics</name>
     <value>ALL</value>
   </property>
+
+  <property>
+    <name>ozone.acl.enabled</name>
+    <value>true</value>
+  </property>
+
+  <property>
+    <name>ozone.acl.authorizer.class</name>
+    <value>org.apache.hadoop.ozone.security.acl.OzoneNativeAuthorizer</value>
+  </property>
 </configuration>
