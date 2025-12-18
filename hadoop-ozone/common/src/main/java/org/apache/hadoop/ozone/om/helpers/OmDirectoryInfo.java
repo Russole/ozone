@@ -18,6 +18,7 @@
 package org.apache.hadoop.ozone.om.helpers;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -35,7 +36,7 @@ import org.apache.hadoop.ozone.protocol.proto.OzoneManagerProtocolProtos.Directo
  * path. Also, it stores directory node related metadata details.
  */
 @Immutable
-public final class OmDirectoryInfo extends WithParentObjectId {
+public final class OmDirectoryInfo extends WithParentObjectId implements WithTags {
 
   private static final Codec<OmDirectoryInfo> CODEC = new DelegatedCodec<>(
       Proto2Codec.get(DirectoryInfo.getDefaultInstance()),
@@ -51,12 +52,14 @@ public final class OmDirectoryInfo extends WithParentObjectId {
   private final long modificationTime;
 
   private final ImmutableList<OzoneAcl> acls;
+  private final ImmutableMap<String, String> tags;
 
   private OmDirectoryInfo(Builder builder) {
     super(builder);
     this.name = builder.name;
     this.owner = builder.owner;
     this.acls = builder.acls.build();
+    this.tags = builder.tags.build();
     this.creationTime = builder.creationTime;
     this.modificationTime = builder.modificationTime;
   }
@@ -70,9 +73,18 @@ public final class OmDirectoryInfo extends WithParentObjectId {
     return new Builder();
   }
 
+  public static Builder newBuilder(OmKeyInfo keyInfo) {
+    return new Builder(keyInfo);
+  }
+
   /** @return new {@code Builder} with values set from this {@code OmDirectoryInfo} */
   public Builder toBuilder() {
     return new Builder(this);
+  }
+
+  @Override
+  public Map<String, String> getTags() {
+    return tags;
   }
 
   /**
@@ -86,9 +98,11 @@ public final class OmDirectoryInfo extends WithParentObjectId {
     private long modificationTime;
 
     private final AclListBuilder acls;
+    private final MapBuilder<String, String> tags;
 
     private Builder() {
       this.acls = AclListBuilder.empty();
+      this.tags = MapBuilder.empty();
     }
 
     private Builder(OmDirectoryInfo obj) {
@@ -98,6 +112,17 @@ public final class OmDirectoryInfo extends WithParentObjectId {
       this.creationTime = obj.creationTime;
       this.modificationTime = obj.modificationTime;
       this.acls = AclListBuilder.of(obj.acls);
+      this.tags = MapBuilder.of(obj.tags);
+    }
+
+    private Builder(OmKeyInfo keyInfo) {
+      super(keyInfo);
+      this.name = keyInfo.getFileName();
+      this.owner = keyInfo.getOwnerName();
+      this.creationTime = keyInfo.getCreationTime();
+      this.modificationTime = keyInfo.getModificationTime();
+      this.acls = AclListBuilder.of(keyInfo.getAcls());
+      this.tags = MapBuilder.of(keyInfo.getTags());
     }
 
     @Override

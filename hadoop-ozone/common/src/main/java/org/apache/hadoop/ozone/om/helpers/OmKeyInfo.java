@@ -254,7 +254,7 @@ public final class OmKeyInfo extends WithParentObjectId
   }
 
   @Override
-  public Map<String, String> getTags() {
+  public ImmutableMap<String, String> getTags() {
     return tags;
   }
 
@@ -436,7 +436,7 @@ public final class OmKeyInfo extends WithParentObjectId
     return encInfo;
   }
 
-  public List<OzoneAcl> getAcls() {
+  public ImmutableList<OzoneAcl> getAcls() {
     return acls;
   }
 
@@ -935,6 +935,10 @@ public final class OmKeyInfo extends WithParentObjectId
   @Override
   public OmKeyInfo copyObject() {
     return new Builder(this).build();
+  }
+
+  public OmDirectoryInfo.Builder toDirectoryInfoBuilder() {
+    return OmDirectoryInfo.newBuilder(this);
   }
 
   /**
