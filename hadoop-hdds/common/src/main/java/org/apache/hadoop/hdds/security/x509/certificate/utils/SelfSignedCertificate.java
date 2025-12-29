@@ -107,20 +107,17 @@ public final class SelfSignedCertificate {
 
   private X509Certificate generateCertificate(BigInteger caCertSerialId) throws OperatorCreationException, IOException {
     byte[] encoded = key.getPublic().getEncoded();
+
+    assert caCertSerialId != null : "caCertSerialId must not be null";
+
     SubjectPublicKeyInfo publicKeyInfo =
         SubjectPublicKeyInfo.getInstance(encoded);
-
 
     ContentSigner contentSigner =
         new JcaContentSignerBuilder(config.getSignatureAlgo())
             .setProvider(config.getProvider()).build(key.getPrivate());
 
-    BigInteger serial;
-    if (caCertSerialId == null) {
-      serial = new BigInteger(Long.toString(Time.monotonicNow()));
-    } else {
-      serial = caCertSerialId;
-    }
+    BigInteger serial = caCertSerialId;
     // For the Root Certificate we form the name from Subject, SCM ID and
     // Cluster ID.
     String dnName = String.format(getNameFormat(),
@@ -136,17 +133,17 @@ public final class SelfSignedCertificate {
     X509v3CertificateBuilder builder = new X509v3CertificateBuilder(name,
         serial, validFrom, validTill, name, publicKeyInfo);
 
-    if (caCertSerialId != null) {
-      builder.addExtension(Extension.basicConstraints, true,
-          new BasicConstraints(true));
-      int keyUsageFlag = KeyUsage.keyCertSign | KeyUsage.cRLSign;
-      KeyUsage keyUsage = new KeyUsage(keyUsageFlag);
-      builder.addExtension(Extension.keyUsage, true, keyUsage);
-      if (altNames != null && !altNames.isEmpty()) {
-        builder.addExtension(new Extension(Extension.subjectAlternativeName,
-            false, new GeneralNames(altNames.toArray(
-                new GeneralName[altNames.size()])).getEncoded()));
-      }
+    builder.addExtension(Extension.basicConstraints, true,
+        new BasicConstraints(true));
+
+    int keyUsageFlag = KeyUsage.keyCertSign | KeyUsage.cRLSign;
+    KeyUsage keyUsage = new KeyUsage(keyUsageFlag);
+    builder.addExtension(Extension.keyUsage, true, keyUsage);
+
+    if (altNames != null && !altNames.isEmpty()) {
+      builder.addExtension(new Extension(Extension.subjectAlternativeName,
+          false, new GeneralNames(altNames.toArray(
+          new GeneralName[altNames.size()])).getEncoded()));
     }
     try {
       //TODO: as part of HDDS-10743 ensure that converter is instantiated only once
