@@ -39,7 +39,6 @@ import org.apache.hadoop.hdds.security.SecurityConfig;
 import org.apache.hadoop.hdds.security.exception.SCMSecurityException;
 import org.apache.hadoop.hdds.security.x509.exception.CertificateException;
 import org.apache.hadoop.ozone.OzoneSecurityUtil;
-import org.apache.hadoop.util.Time;
 import org.bouncycastle.asn1.ASN1EncodableVector;
 import org.bouncycastle.asn1.ASN1Object;
 import org.bouncycastle.asn1.ASN1ObjectIdentifier;
@@ -142,8 +141,7 @@ public final class SelfSignedCertificate {
 
     if (altNames != null && !altNames.isEmpty()) {
       builder.addExtension(new Extension(Extension.subjectAlternativeName,
-          false, new GeneralNames(altNames.toArray(
-          new GeneralName[altNames.size()])).getEncoded()));
+          false, new GeneralNames(altNames.toArray(new GeneralName[altNames.size()])).getEncoded()));
     }
     try {
       //TODO: as part of HDDS-10743 ensure that converter is instantiated only once
