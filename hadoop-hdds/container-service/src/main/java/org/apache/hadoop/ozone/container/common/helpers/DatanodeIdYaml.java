@@ -38,7 +38,16 @@ import org.apache.hadoop.ozone.container.common.DatanodeLayoutStorage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.yaml.snakeyaml.DumperOptions;
+import org.yaml.snakeyaml.LoaderOptions;
 import org.yaml.snakeyaml.Yaml;
+import org.yaml.snakeyaml.constructor.AbstractConstruct;
+import org.yaml.snakeyaml.constructor.SafeConstructor;
+import org.yaml.snakeyaml.introspector.BeanAccess;
+import org.yaml.snakeyaml.nodes.MappingNode;
+import org.yaml.snakeyaml.nodes.Node;
+import org.yaml.snakeyaml.nodes.Tag;
+import org.yaml.snakeyaml.representer.Representer;
+import org.yaml.snakeyaml.introspector.PropertyUtils;
 
 /**
  * Class for creating datanode.id file in yaml format.
@@ -47,6 +56,10 @@ public final class DatanodeIdYaml {
 
   private static final Logger LOG =
       LoggerFactory.getLogger(DatanodeIdYaml.class);
+
+  private static final Tag DATANODE_DETAILS_YAML_TAG = new Tag("!datanodeDetails");
+
+  private static final Tag DATANODE_DETAILS_GLOBAL_TAG = new Tag(DatanodeDetailsYaml.class);
 
   private DatanodeIdYaml() {
     // static helper methods only, no state.
@@ -66,7 +79,7 @@ public final class DatanodeIdYaml {
     DumperOptions options = new DumperOptions();
     options.setPrettyFlow(true);
     options.setDefaultFlowStyle(DumperOptions.FlowStyle.FLOW);
-    Yaml yaml = new Yaml(options);
+    Yaml yaml = createYamlForDatanodeId();
 
     final DatanodeDetailsYaml data = getDatanodeDetailsYaml(datanodeDetails, conf);
     YamlUtils.dump(yaml, data, path, LOG);
@@ -81,8 +94,8 @@ public final class DatanodeIdYaml {
     try (InputStream inputFileStream = Files.newInputStream(path.toPath())) {
       DatanodeDetailsYaml datanodeDetailsYaml;
       try {
-        datanodeDetailsYaml =
-            YamlUtils.loadAs(inputFileStream, DatanodeDetailsYaml.class);
+        Yaml yaml = createYamlForDatanodeId();
+        datanodeDetailsYaml = (DatanodeDetailsYaml) yaml.load(inputFileStream);
       } catch (Exception e) {
         throw new IOException("Unable to parse yaml file.", e);
       }
@@ -235,6 +248,87 @@ public final class DatanodeIdYaml {
     public String toString() {
       return "DatanodeDetailsYaml(" + uuid + ", " + hostName + "/" + ipAddress + ")";
     }
+  }
+
+  /**
+   * ADDED: Custom SafeConstructor derived loader.
+   *
+   * Why needed:
+   * - Old datanode.id YAML can contain a global class tag (!!org.apache....DatanodeDetailsYaml),
+   *   and SafeConstructor will not instantiate arbitrary classes unless we register a constructor for the tag.
+   * - New YAML will be dumped with a stable custom tag (!datanodeDetails).
+   */
+  private static final class DatanodeIdYamlConstructor extends SafeConstructor {
+    DatanodeIdYamlConstructor() {
+      super(new LoaderOptions()); // same style as ContainerDataYaml
+
+      // ADDED: constructor for stable custom tag
+      this.yamlConstructors.put(DATANODE_DETAILS_YAML_TAG, new ConstructDatanodeDetailsYaml());
+
+      // ADDED: backward compatibility for old files with global tag (!!fully.qualified.class)
+      this.yamlConstructors.put(DATANODE_DETAILS_GLOBAL_TAG, new ConstructDatanodeDetailsYaml());
+    }
+
+    private final class ConstructDatanodeDetailsYaml extends AbstractConstruct {
+      @Override
+      public Object construct(Node node) {
+        MappingNode mnode = (MappingNode) node;
+        Map<Object, Object> nodes = constructMapping(mnode);
+
+        // ADDED: manual mapping -> bean (SafeConstructor does not auto-create beans for global tags)
+        DatanodeDetailsYaml out = new DatanodeDetailsYaml();
+        out.setUuid((String) nodes.get("uuid"));
+        out.setIpAddress((String) nodes.get("ipAddress"));
+        out.setHostName((String) nodes.get("hostName"));
+        out.setCertSerialId((String) nodes.get("certSerialId"));
+        out.setPersistedOpState((String) nodes.get("persistedOpState"));
+
+        Object expiryObj = nodes.get("persistedOpStateExpiryEpochSec");
+        long expiry = expiryObj == null ? 0L : ((Number) expiryObj).longValue();
+        out.setPersistedOpStateExpiryEpochSec(expiry);
+
+        @SuppressWarnings("unchecked")
+        Map<String, Integer> portDetails = (Map<String, Integer>) nodes.get("portDetails");
+        out.setPortDetails(portDetails);
+
+        Object initialObj = nodes.get("initialVersion");
+        int initialVersion = initialObj == null ? 0 : ((Number) initialObj).intValue();
+        out.setInitialVersion(initialVersion);
+
+        Object currentObj = nodes.get("currentVersion");
+        int currentVersion = currentObj == null ? 0 : ((Number) currentObj).intValue();
+        out.setCurrentVersion(currentVersion);
+
+        return out;
+      }
+    }
+  }
+
+  /**
+   * ADDED: One factory for both load and dump to keep tag format consistent.
+   * - Dump: always writes !datanodeDetails (stable tag), avoiding global class tags.
+   * - Load: supports both !datanodeDetails and the legacy global class tag.
+   */
+  private static Yaml createYamlForDatanodeId() {
+    // CHANGED: dumper options preserved from original createDatanodeIdFile()
+    DumperOptions dumperOptions = new DumperOptions();
+    dumperOptions.setPrettyFlow(true);
+    dumperOptions.setDefaultFlowStyle(DumperOptions.FlowStyle.FLOW);
+
+    // CHANGED: align BeanAccess/PropertyUtils with ContainerDataYaml
+    PropertyUtils propertyUtils = new PropertyUtils();
+    propertyUtils.setBeanAccess(BeanAccess.FIELD);
+    propertyUtils.setAllowReadOnlyProperties(true);
+
+    Representer representer = new Representer(dumperOptions);
+    representer.setPropertyUtils(propertyUtils);
+
+    // ADDED: write stable tag instead of global class tag
+    representer.addClassTag(DatanodeDetailsYaml.class, DATANODE_DETAILS_YAML_TAG);
+
+    Yaml yaml = new Yaml(new DatanodeIdYamlConstructor(), representer);
+    yaml.setBeanAccess(BeanAccess.FIELD);
+    return yaml;
   }
 
   private static DatanodeDetailsYaml getDatanodeDetailsYaml(

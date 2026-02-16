@@ -34,7 +34,6 @@ import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.parsers.ParserConfigurationException;
 import org.apache.commons.io.FilenameUtils;
 import org.apache.hadoop.hdds.scm.net.NodeSchema.LayerType;
-import org.apache.hadoop.hdds.server.YamlUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.w3c.dom.Document;
@@ -43,6 +42,12 @@ import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 import org.w3c.dom.Text;
 import org.xml.sax.SAXException;
+import org.yaml.snakeyaml.LoaderOptions;
+import org.yaml.snakeyaml.Yaml;
+import org.yaml.snakeyaml.constructor.AbstractConstruct;
+import org.yaml.snakeyaml.constructor.SafeConstructor;
+import org.yaml.snakeyaml.nodes.MappingNode;
+import org.yaml.snakeyaml.nodes.Tag;
 
 /**
  * A Network topology layer schema loading tool that loads user defined network
@@ -66,6 +71,9 @@ public final class NodeSchemaLoader {
 
   private static final int LAYOUT_VERSION = 1;
   private static volatile NodeSchemaLoader instance = null;
+
+  private static final Tag NODE_SCHEMA_YAML_TAG = new Tag("!nodeSchema");
+  private static final Tag NODE_SCHEMA_GLOBAL_TAG = new Tag(NodeSchema.class);
 
   private NodeSchemaLoader() { }
 
@@ -226,9 +234,9 @@ public final class NodeSchemaLoader {
     NodeSchemaLoadResult finalSchema;
 
     try {
-      NodeSchema nodeTree;
 
-      nodeTree = YamlUtils.loadAs(schemaFile, NodeSchema.class);
+      Yaml yaml = createYamlForLoad();
+      NodeSchema nodeTree = (NodeSchema) yaml.load(schemaFile);
 
       List<NodeSchema> schemaList = new ArrayList<>();
       if (nodeTree.getType() != LayerType.ROOT) {
@@ -488,5 +496,76 @@ public final class NodeSchemaLoader {
       throw new IllegalArgumentException("Missing type Element");
     }
     return new NodeSchema(type, cost, prefix, defaultName);
+  }
+
+  // =======================================================================
+// ===== ADDED: Custom SafeConstructor for NodeSchema YAML loading =====
+// =======================================================================
+
+  private static final class NodeSchemaYamlConstructor extends SafeConstructor {
+
+    NodeSchemaYamlConstructor() {
+      super(new LoaderOptions());
+
+      // Support stable custom tag: !nodeSchema
+      this.yamlConstructors.put(
+          NODE_SCHEMA_YAML_TAG,
+          new ConstructNodeSchema());
+
+      // Backward compatibility:
+      // Support old global tag:
+      // !!org.apache.hadoop.hdds.scm.net.NodeSchema
+      this.yamlConstructors.put(
+          NODE_SCHEMA_GLOBAL_TAG,
+          new ConstructNodeSchema());
+    }
+
+    private final class ConstructNodeSchema extends AbstractConstruct {
+
+      @Override
+      public Object construct(org.yaml.snakeyaml.nodes.Node node) {
+
+        MappingNode mnode = (MappingNode) node;
+        Map<Object, Object> nodes = constructMapping(mnode);
+
+        Object typeObj = nodes.get("type");
+        if (typeObj == null) {
+          throw new IllegalArgumentException("Missing 'type' in NodeSchema YAML");
+        }
+
+        LayerType type = (typeObj instanceof LayerType)
+            ? (LayerType) typeObj
+            : NodeSchema.LayerType.getType(typeObj.toString());
+
+        int cost = nodes.get("cost") == null
+            ? 0
+            : ((Number) nodes.get("cost")).intValue();
+
+        String prefix = nodes.get("prefix") == null
+            ? null
+            : nodes.get("prefix").toString();
+
+        String defaultName = nodes.get("default") == null
+            ? null
+            : nodes.get("default").toString();
+
+        NodeSchema schema = new NodeSchema(type, cost, prefix, defaultName);
+
+        // Handle sublayer recursively
+        Object sublayerObj = nodes.get("sublayer");
+        if (sublayerObj instanceof List) {
+          @SuppressWarnings("unchecked")
+          List<NodeSchema> sub = (List<NodeSchema>) sublayerObj;
+          schema.setSublayer(sub);
+        }
+
+        return schema;
+      }
+    }
+  }
+
+  // ===== ADDED: Create YAML instance using custom SafeConstructor =====
+  private static Yaml createYamlForLoad() {
+    return new Yaml(new NodeSchemaYamlConstructor());
   }
 }
