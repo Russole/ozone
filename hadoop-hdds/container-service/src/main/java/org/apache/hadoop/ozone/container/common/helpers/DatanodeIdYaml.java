@@ -251,21 +251,15 @@ public final class DatanodeIdYaml {
   }
 
   /**
-   * ADDED: Custom SafeConstructor derived loader.
-   *
-   * Why needed:
-   * - Old datanode.id YAML can contain a global class tag (!!org.apache....DatanodeDetailsYaml),
-   *   and SafeConstructor will not instantiate arbitrary classes unless we register a constructor for the tag.
-   * - New YAML will be dumped with a stable custom tag (!datanodeDetails).
+   * Custom constructor derived from SafeConstructor for datanode.id YAML.
+   * Handles both custom and legacy tags in a safe way.
    */
   private static final class DatanodeIdYamlConstructor extends SafeConstructor {
     DatanodeIdYamlConstructor() {
-      super(new LoaderOptions()); // same style as ContainerDataYaml
+      super(new LoaderOptions());
 
-      // ADDED: constructor for stable custom tag
       this.yamlConstructors.put(DATANODE_DETAILS_YAML_TAG, new ConstructDatanodeDetailsYaml());
 
-      // ADDED: backward compatibility for old files with global tag (!!fully.qualified.class)
       this.yamlConstructors.put(DATANODE_DETAILS_GLOBAL_TAG, new ConstructDatanodeDetailsYaml());
     }
 
@@ -275,7 +269,6 @@ public final class DatanodeIdYaml {
         MappingNode mnode = (MappingNode) node;
         Map<Object, Object> nodes = constructMapping(mnode);
 
-        // ADDED: manual mapping -> bean (SafeConstructor does not auto-create beans for global tags)
         DatanodeDetailsYaml out = new DatanodeDetailsYaml();
         out.setUuid((String) nodes.get("uuid"));
         out.setIpAddress((String) nodes.get("ipAddress"));

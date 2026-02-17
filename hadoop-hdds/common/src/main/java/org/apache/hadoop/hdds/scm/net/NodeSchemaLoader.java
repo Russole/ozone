@@ -498,25 +498,19 @@ public final class NodeSchemaLoader {
     return new NodeSchema(type, cost, prefix, defaultName);
   }
 
-  // =======================================================================
-// ===== ADDED: Custom SafeConstructor for NodeSchema YAML loading =====
-// =======================================================================
-
+  /**
+   * Custom constructor for parsing NodeSchema YAML safely.
+   * Ensures only expected tags are supported.
+   */
   private static final class NodeSchemaYamlConstructor extends SafeConstructor {
 
     NodeSchemaYamlConstructor() {
       super(new LoaderOptions());
 
-      // Support stable custom tag: !nodeSchema
-      this.yamlConstructors.put(
-          NODE_SCHEMA_YAML_TAG,
+      this.yamlConstructors.put(NODE_SCHEMA_YAML_TAG,
           new ConstructNodeSchema());
 
-      // Backward compatibility:
-      // Support old global tag:
-      // !!org.apache.hadoop.hdds.scm.net.NodeSchema
-      this.yamlConstructors.put(
-          NODE_SCHEMA_GLOBAL_TAG,
+      this.yamlConstructors.put(NODE_SCHEMA_GLOBAL_TAG,
           new ConstructNodeSchema());
     }
 
