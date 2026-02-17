@@ -236,7 +236,8 @@ public final class NodeSchemaLoader {
     try {
 
       Yaml yaml = createYamlForLoad();
-      NodeSchema nodeTree = (NodeSchema) yaml.load(schemaFile);
+      Object loaded = yaml.load(schemaFile);
+      NodeSchema nodeTree = toNodeSchema(loaded);
 
       List<NodeSchema> schemaList = new ArrayList<>();
       if (nodeTree.getType() != LayerType.ROOT) {
@@ -273,6 +274,84 @@ public final class NodeSchemaLoader {
     }
 
     return finalSchema;
+  }
+
+  private static NodeSchema toNodeSchema(Object loaded) {
+    if (loaded == null) {
+      throw new IllegalArgumentException("Empty YAML content.");
+    }
+    if (loaded instanceof NodeSchema) {
+      return (NodeSchema) loaded;
+    }
+    if (loaded instanceof Map) {
+      @SuppressWarnings("unchecked")
+      Map<Object, Object> m = (Map<Object, Object>) loaded;
+      return mapToNodeSchema(m);
+    }
+    throw new IllegalArgumentException("Invalid YAML root type: " +
+        loaded.getClass().getName());
+  }
+
+  private static NodeSchema mapToNodeSchema(Map<Object, Object> nodes) {
+    Object typeObj = nodes.get("type");
+    if (typeObj == null) {
+      throw new IllegalArgumentException("Missing 'type' in NodeSchema YAML");
+    }
+
+    LayerType type;
+    if (typeObj instanceof LayerType) {
+      type = (LayerType) typeObj;
+    } else {
+      String raw = typeObj.toString().trim();
+
+      type = NodeSchema.LayerType.getType(raw);
+
+      if (type == null) {
+        String normalized = raw
+            .toUpperCase()
+            .replace('-', '_')
+            .replace(' ', '_');
+
+        try {
+          type = LayerType.valueOf(normalized);
+        } catch (IllegalArgumentException ignored) {
+
+        }
+      }
+    }
+
+    if (type == null) {
+      throw new IllegalArgumentException("Unsupported layer type: " + typeObj);
+    }
+
+    int cost = 0;
+    Object costObj = nodes.get("cost");
+    if (costObj != null) {
+      if (!(costObj instanceof Number)) {
+        throw new IllegalArgumentException("'cost' must be a number");
+      }
+      cost = ((Number) costObj).intValue();
+    }
+
+    String prefix = nodes.get("prefix") == null ? null : nodes.get("prefix").toString();
+    String defaultName = nodes.get("default") == null ? null : nodes.get("default").toString();
+
+    NodeSchema schema = new NodeSchema(type, cost, prefix, defaultName);
+
+    Object sublayerObj = nodes.get("sublayer");
+    if (sublayerObj != null) {
+      if (!(sublayerObj instanceof List)) {
+        throw new IllegalArgumentException("'sublayer' must be a list");
+      }
+      List<?> raw = (List<?>) sublayerObj;
+      List<NodeSchema> sub = new ArrayList<>(raw.size());
+      for (Object o : raw) {
+        sub.add(toNodeSchema(o));
+      }
+      schema.setSublayer(sub);
+    }
+
+    return schema;
   }
 
   /**

@@ -24,6 +24,10 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 import java.io.FileNotFoundException;
+import java.net.URI;
+import java.net.URL;
+import java.nio.file.Paths;
+import java.util.Objects;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -42,37 +46,41 @@ class TestYamlSchemaLoader {
     );
   }
 
+  private String resourcePath(String resource) throws Exception {
+    URL url = Objects.requireNonNull(
+        classLoader.getResource(resource),
+        "Test resource not found on classpath: " + resource);
+    URI uri = url.toURI();
+    return Paths.get(uri).toString();
+  }
+
   @ParameterizedTest
   @MethodSource("getSchemaFiles")
-  void loadSchemaFromFile(String schemaFile, String errMsg) {
-    String filePath = classLoader.getResource(
-        "./networkTopologyTestFiles/" + schemaFile).getPath();
+  void loadSchemaFromFile(String schemaFile, String errMsg) throws Exception {
+    String filePath = resourcePath("networkTopologyTestFiles/" + schemaFile);
     Throwable e = assertThrows(IllegalArgumentException.class, () ->
         NodeSchemaLoader.getInstance().loadSchemaFromFile(filePath));
     assertThat(e).hasMessageContaining(errMsg);
   }
 
   @Test
-  void testGood() {
-    String filePath = classLoader.getResource(
-        "./networkTopologyTestFiles/good.yaml").getPath();
+  void testGood() throws Exception {
+    String filePath = resourcePath("networkTopologyTestFiles/good.yaml");
     assertDoesNotThrow(() ->
         NodeSchemaLoader.getInstance().loadSchemaFromFile(filePath));
   }
 
   @Test
-  void testNotExist() {
-    String filePath = classLoader.getResource(
-        "./networkTopologyTestFiles/good.yaml").getPath() + ".backup";
+  void testNotExist() throws Exception {
+    String filePath = resourcePath("networkTopologyTestFiles/good.yaml") + ".backup";
     Throwable e = assertThrows(FileNotFoundException.class, () ->
         NodeSchemaLoader.getInstance().loadSchemaFromFile(filePath));
     assertThat(e).hasMessageContaining("not found");
   }
 
   @Test
-  void testDefaultYaml() {
-    String filePath = classLoader.getResource(
-        "network-topology-default.yaml").getPath();
+  void testDefaultYaml() throws Exception {
+    String filePath = resourcePath("network-topology-default.yaml");
     NodeSchemaLoader.NodeSchemaLoadResult result =
         assertDoesNotThrow(() ->
             NodeSchemaLoader.getInstance().loadSchemaFromFile(filePath));
