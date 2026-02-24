@@ -15,6 +15,7 @@
 
 name: update-ozone-site-config-doc
 on:
+  workflow_dispatch:
   workflow_run:
     workflows: ["build-branch"]
     types: [completed]
@@ -23,9 +24,10 @@ on:
 jobs:
   update-ozone-site-config-doc:
     if: |
-      github.event.workflow_run.conclusion == 'success' &&
+      (github.event_name == 'workflow_dispatch') ||
+      (github.event.workflow_run.conclusion == 'success' &&
       github.repository == 'apache/ozone' &&
-      !startsWith(github.event.workflow_run.head_commit.message, '[Auto]')
+      !startsWith(github.event.workflow_run.head_commit.message, '[Auto]'))
     runs-on: ubuntu-24.04
     steps:
       - name: Download generated documentation
@@ -34,7 +36,7 @@ jobs:
           name: config-documentation
           path: .
           run-id: ${{ github.event.workflow_run.id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ github.token }}
       
       - name: Check if ozone-site repository exists
         id: check-site-repo
@@ -47,7 +49,7 @@ jobs:
             echo "ozone-site repository not found for $REPO_OWNER, skipping"
           fi
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
       
       - name: Checkout ozone-site repository
         if: steps.check-site-repo.outputs.exists == 'true'
