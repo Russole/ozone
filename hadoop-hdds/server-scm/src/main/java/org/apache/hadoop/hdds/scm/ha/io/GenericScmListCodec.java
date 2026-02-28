@@ -19,47 +19,34 @@ package org.apache.hadoop.hdds.scm.ha.io;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import org.apache.hadoop.hdds.protocol.proto.SCMRatisProtocol.ListArgument;
 import org.apache.ratis.thirdparty.com.google.protobuf.ByteString;
 import org.apache.ratis.thirdparty.com.google.protobuf.InvalidProtocolBufferException;
 
 /**
- * {@link ScmCodec} for {@link List} objects.
+ * List codec without reflection. Element type is fixed by this codec instance.
  */
-public class ScmListCodec implements ScmCodec<Object> {
+public final class GenericScmListCodec<T> implements ScmCodec<List<T>> {
+  private final Class<T> elementClass;
+  private final ScmCodec<T> elementCodec;
 
-  private final Map<String, ScmCodec<?>> listCodecsByElementType;
-
-  public ScmListCodec(Map<String, ScmCodec<?>> listCodecsByElementType) {
-    this.listCodecsByElementType = listCodecsByElementType;
+  public GenericScmListCodec(Class<T> elementClass, ScmCodec<T> elementCodec) {
+    this.elementClass = elementClass;
+    this.elementCodec = elementCodec;
   }
 
   @Override
-  public ByteString serialize(Object object) throws InvalidProtocolBufferException {
-    final List<?> values = (List<?>) object;
-
-    if (values.isEmpty()) {
-      return ListArgument.newBuilder()
-          .setType(Object.class.getName())
-          .build()
-          .toByteString();
+  public ByteString serialize(List<T> values) throws InvalidProtocolBufferException {
+    final ListArgument.Builder b = ListArgument.newBuilder()
+        .setType(elementClass.getName());
+    for (T v : values) {
+      b.addValue(elementCodec.serialize(v));
     }
-
-    final String elementType = values.get(0).getClass().getName();
-    final ScmCodec<?> codec = listCodecsByElementType.get(elementType);
-    if (codec == null) {
-      throw new InvalidProtocolBufferException(
-          "No List codec registered for element type: " + elementType);
-    }
-
-    @SuppressWarnings("unchecked")
-    final ScmCodec<Object> c = (ScmCodec<Object>) codec;
-    return c.serialize(object);
+    return b.build().toByteString();
   }
 
   @Override
-  public Object deserialize(Class<?> type, ByteString value)
+  public List<T> deserialize(Class<?> type, ByteString value)
       throws InvalidProtocolBufferException {
 
     final ListArgument listArgs = ListArgument.parseFrom(value.toByteArray());
@@ -72,11 +59,17 @@ public class ScmListCodec implements ScmCodec<Object> {
       return new ArrayList<>();
     }
 
-    final ScmCodec<?> codec = listCodecsByElementType.get(listArgs.getType());
-    if (codec == null) {
+    final String expected = elementClass.getName();
+    final String actual = listArgs.getType();
+    if (!expected.equals(actual)) {
       throw new InvalidProtocolBufferException(
-          "No List codec registered for element type: " + listArgs.getType());
+          "List element type mismatch: expected=" + expected + ", actual=" + actual);
     }
-    return codec.deserialize(type, value);
+
+    final List<T> result = new ArrayList<>(listArgs.getValueCount());
+    for (ByteString elementBytes : listArgs.getValueList()) {
+      result.add(elementCodec.deserialize(elementClass, elementBytes));
+    }
+    return result;
   }
 }

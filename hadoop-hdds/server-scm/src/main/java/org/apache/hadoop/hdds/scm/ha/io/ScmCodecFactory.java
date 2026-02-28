@@ -25,6 +25,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import org.apache.commons.lang3.ClassUtils;
+import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos;
 import org.apache.hadoop.hdds.security.symmetric.ManagedSecretKey;
 import org.apache.ratis.thirdparty.com.google.protobuf.ByteString;
 import org.apache.ratis.thirdparty.com.google.protobuf.InvalidProtocolBufferException;
@@ -37,11 +38,12 @@ public final class ScmCodecFactory {
 
   private static Map<Class<?>, ScmCodec> codecs = new HashMap<>();
 
+  private static final Map<String, ScmCodec<?>> LIST_CODECS_BY_ELEM = new HashMap<>();
+
   static {
     codecs.put(com.google.protobuf.Message.class, new ScmNonShadedGeneratedMessageCodec());
     codecs.put(Message.class, new ScmGeneratedMessageCodec());
     codecs.put(ProtocolMessageEnum.class, new ScmEnumCodec());
-    codecs.put(List.class, new ScmListCodec());
     codecs.put(Integer.class, new ScmIntegerCodec());
     codecs.put(Long.class, new ScmLongCodec());
     codecs.put(String.class, new ScmStringCodec());
@@ -51,6 +53,30 @@ public final class ScmCodecFactory {
     codecs.put(com.google.protobuf.ByteString.class, new ScmNonShadedByteStringCodec());
     codecs.put(ByteString.class, new ScmByteStringCodec());
     codecs.put(ManagedSecretKey.class, new ScmManagedSecretKeyCodec());
+
+    registerListCodec(String.class);
+    registerListCodec(Long.class);
+    registerListCodec(Integer.class);
+
+    registerListCodec(StorageContainerDatanodeProtocolProtos.DeletedBlocksTransaction.class);
+
+    codecs.put(List.class, new ScmListCodec(LIST_CODECS_BY_ELEM));
+  }
+
+  private static <T> void registerListCodec(Class<T> elementClass) {
+    final ScmCodec<T> elementCodec;
+    try {
+      @SuppressWarnings("unchecked")
+      final ScmCodec<T> c = (ScmCodec<T>) getCodec(elementClass);
+      elementCodec = c;
+    } catch (InvalidProtocolBufferException e) {
+      throw new IllegalStateException(
+          "Failed to initialize codec for list element type: " + elementClass.getName(), e);
+    }
+
+    LIST_CODECS_BY_ELEM.put(
+        elementClass.getName(),
+        new GenericScmListCodec<>(elementClass, elementCodec));
   }
 
   private ScmCodecFactory() { }
