@@ -28,6 +28,7 @@ import org.apache.commons.lang3.ClassUtils;
 import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos;
 import org.apache.hadoop.hdds.protocol.proto.HddsProtos;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos;
+import org.apache.hadoop.hdds.scm.ha.SCMNodeDetails;
 import org.apache.hadoop.hdds.security.symmetric.ManagedSecretKey;
 import org.apache.ratis.thirdparty.com.google.protobuf.ByteString;
 import org.apache.ratis.thirdparty.com.google.protobuf.InvalidProtocolBufferException;
@@ -66,6 +67,8 @@ public final class ScmCodecFactory {
     registerListCodec(HddsProtos.Node.class);
     registerListCodec(HddsProtos.Port.class);
     registerListCodec(HddsProtos.KeyValue.class);
+    registerListCodec(ManagedSecretKey.class);
+    registerListCodec(SCMNodeDetails.class);
 
     codecs.put(List.class, new ScmListCodec(LIST_CODECS_BY_ELEM));
   }
