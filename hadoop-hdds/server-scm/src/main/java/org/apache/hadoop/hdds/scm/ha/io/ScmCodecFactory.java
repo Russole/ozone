@@ -44,6 +44,7 @@ public final class ScmCodecFactory {
   static {
     codecs.put(com.google.protobuf.Message.class, new ScmNonShadedGeneratedMessageCodec());
     codecs.put(Message.class, new ScmGeneratedMessageCodec());
+    codecs.put(List.class, new ScmListCodec());
     codecs.put(Integer.class, new ScmIntegerCodec());
     codecs.put(Long.class, new ScmLongCodec());
     codecs.put(String.class, new ScmStringCodec());
