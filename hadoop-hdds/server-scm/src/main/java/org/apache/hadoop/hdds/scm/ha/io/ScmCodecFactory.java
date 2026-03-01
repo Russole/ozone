@@ -25,6 +25,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import org.apache.commons.lang3.ClassUtils;
+import org.apache.hadoop.hdds.protocol.proto.HddsProtos;
 import org.apache.hadoop.hdds.protocol.proto.StorageContainerDatanodeProtocolProtos;
 import org.apache.hadoop.hdds.security.symmetric.ManagedSecretKey;
 import org.apache.ratis.thirdparty.com.google.protobuf.ByteString;
@@ -57,7 +58,7 @@ public final class ScmCodecFactory {
     registerListCodec(String.class);
     registerListCodec(Long.class);
     registerListCodec(Integer.class);
-
+    registerListCodec(HddsProtos.PipelineID.class);
     registerListCodec(StorageContainerDatanodeProtocolProtos.DeletedBlocksTransaction.class);
 
     codecs.put(List.class, new ScmListCodec(LIST_CODECS_BY_ELEM));
