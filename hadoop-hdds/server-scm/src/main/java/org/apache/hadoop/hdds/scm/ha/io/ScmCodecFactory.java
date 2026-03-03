@@ -32,7 +32,6 @@ import org.apache.hadoop.hdds.protocol.proto.HddsProtos.PipelineState;
 import org.apache.hadoop.hdds.security.symmetric.ManagedSecretKey;
 import org.apache.ratis.thirdparty.com.google.protobuf.ByteString;
 import org.apache.ratis.thirdparty.com.google.protobuf.InvalidProtocolBufferException;
-import org.apache.ratis.thirdparty.com.google.protobuf.Message;
 
 /**
  * Maps types to the corresponding {@link ScmCodec} implementation.
