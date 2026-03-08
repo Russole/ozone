@@ -19,6 +19,8 @@ package org.apache.hadoop.hdds.scm.ha.io;
 
 import com.google.protobuf.Message;
 import com.google.protobuf.ProtocolMessageEnum;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
 import java.math.BigInteger;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
@@ -46,6 +48,7 @@ import org.apache.ratis.thirdparty.com.google.protobuf.InvalidProtocolBufferExce
 public final class ScmCodecFactory {
 
   private static Map<Class<?>, ScmCodec<?>> codecs = new HashMap<>();
+  private static Map<Type, ScmCodec<?>> listCodecs = new HashMap<>();
 
   static {
     putProto(ContainerID.getDefaultInstance());
@@ -55,7 +58,6 @@ public final class ScmCodecFactory {
     putProto(DeletedBlocksTransaction.getDefaultInstance());
     putProto(DeletedBlocksTransactionSummary.getDefaultInstance());
 
-    codecs.put(List.class, new ScmListCodec());
     codecs.put(Integer.class, new ScmIntegerCodec());
     codecs.put(Long.class, new ScmLongCodec());
     codecs.put(String.class, new ScmStringCodec());
@@ -69,6 +71,11 @@ public final class ScmCodecFactory {
     putEnum(LifeCycleEvent.class, LifeCycleEvent::forNumber);
     putEnum(PipelineState.class, PipelineState::forNumber);
     putEnum(NodeType.class, NodeType::forNumber);
+
+    putListCodec(DeletedBlocksTransaction.class);
+    putListCodec(Long.class);
+    putListCodec(ManagedSecretKey.class);
+    putListCodec(X509Certificate.class);
   }
 
   static <T extends Message> void putProto(T proto) {
@@ -81,7 +88,25 @@ public final class ScmCodecFactory {
     codecs.put(enumClass, new ScmEnumCodec<>(enumClass, forNumber));
   }
 
+  private static <T> void putListCodec(Class<T> elementType) {
+    @SuppressWarnings("unchecked")
+    ScmCodec<T> elementCodec = (ScmCodec<T>) codecs.get(elementType);
+    if (elementCodec == null) {
+      throw new IllegalStateException(
+          "Element codec must be registered before list codec: " + elementType);
+    }
+    listCodecs.put(elementType, new ScmListCodec<>(elementType, elementCodec));
+  }
+
   private ScmCodecFactory() { }
+
+  public static ScmCodec<?> getCodec(Class<?> type, Type genericType)
+      throws InvalidProtocolBufferException {
+    if (List.class.isAssignableFrom(type)) {
+      return getListCodec(genericType);
+    }
+    return getCodec(type);
+  }
 
   public static ScmCodec getCodec(Class<?> type)
       throws InvalidProtocolBufferException {
@@ -96,5 +121,30 @@ public final class ScmCodecFactory {
     }
     throw new InvalidProtocolBufferException(
         "Codec for " + type + " not found!");
+  }
+
+  private static ScmCodec<?> getListCodec(Type genericType)
+      throws InvalidProtocolBufferException {
+    if (!(genericType instanceof ParameterizedType)) {
+      throw new InvalidProtocolBufferException(
+          "Missing generic type information for List parameter: " + genericType);
+    }
+
+    ParameterizedType parameterizedType = (ParameterizedType) genericType;
+    Type elementType = parameterizedType.getActualTypeArguments()[0];
+    if (!(elementType instanceof Class<?>)) {
+      throw new InvalidProtocolBufferException(
+          "Unsupported List element type: " + elementType);
+    }
+
+    Class<?> elementClass = (Class<?>) elementType;
+    ScmCodec<?> listCodec = listCodecs.get(elementClass);
+    if (listCodec != null) {
+      return listCodec;
+    }
+
+    throw new InvalidProtocolBufferException(
+        "List codec for element type " + elementClass.getName()
+            + " not found!");
   }
 }

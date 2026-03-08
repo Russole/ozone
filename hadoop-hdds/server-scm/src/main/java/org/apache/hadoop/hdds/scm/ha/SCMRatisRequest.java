@@ -25,6 +25,7 @@ import org.apache.hadoop.hdds.protocol.proto.SCMRatisProtocol.Method;
 import org.apache.hadoop.hdds.protocol.proto.SCMRatisProtocol.MethodArgument;
 import org.apache.hadoop.hdds.protocol.proto.SCMRatisProtocol.RequestType;
 import org.apache.hadoop.hdds.protocol.proto.SCMRatisProtocol.SCMRatisRequestProto;
+import org.apache.hadoop.hdds.scm.ha.io.ScmCodec;
 import org.apache.hadoop.hdds.scm.ha.io.ScmCodecFactory;
 import org.apache.ratis.proto.RaftProtos.StateMachineLogEntryProto;
 import org.apache.ratis.protocol.Message;
@@ -104,14 +105,16 @@ public final class SCMRatisRequest {
     final List<MethodArgument> args = new ArrayList<>();
 
     int paramCounter = 0;
-    for (Object argument : arguments) {
+    for (int i = 0; i < arguments.length; i++) {
       final MethodArgument.Builder argBuilder = MethodArgument.newBuilder();
       // Set actual method parameter type, not actual argument type.
       // This is done to avoid MethodNotFoundException in case if argument is
       // subclass type, where as method is defined with super class type.
-      argBuilder.setType(parameterTypes[paramCounter++].getName());
-      argBuilder.setValue(ScmCodecFactory.getCodec(argument.getClass())
-          .serialize(argument));
+      @SuppressWarnings("unchecked")
+      final ScmCodec<Object> codec = (ScmCodec<Object>) ScmCodecFactory.getCodec(
+              parameterTypes[i], genericParameterTypes[i]);
+      argBuilder.setType(parameterTypes[i].getName());
+      argBuilder.setValue(codec.serialize(arguments[i]));
       args.add(argBuilder.build());
     }
     methodBuilder.addAllArgs(args);
