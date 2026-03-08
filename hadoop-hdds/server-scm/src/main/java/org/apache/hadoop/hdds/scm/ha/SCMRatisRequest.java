@@ -18,6 +18,7 @@
 package org.apache.hadoop.hdds.scm.ha;
 
 import com.google.common.base.Preconditions;
+import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.List;
 import org.apache.hadoop.hdds.protocol.proto.SCMRatisProtocol.Method;
@@ -41,23 +42,27 @@ public final class SCMRatisRequest {
   private final String operation;
   private final Object[] arguments;
   private final Class<?>[] parameterTypes;
+  private final Type[] genericParameterTypes;
   private static final Logger LOG = LoggerFactory
       .getLogger(SCMRatisRequest.class);
 
   private SCMRatisRequest(final RequestType type, final String operation,
-      final Class<?>[] parameterTypes, final Object... arguments) {
+      final Class<?>[] parameterTypes, final Type[] genericParameterTypes, final Object... arguments) {
     this.type = type;
     this.operation = operation;
     this.parameterTypes = parameterTypes;
+    this.genericParameterTypes = genericParameterTypes;
     this.arguments = arguments;
   }
 
   public static SCMRatisRequest of(final RequestType type,
       final String operation,
       final Class<?>[] parameterTypes,
+      final Type[] genericParameterTypes,
       final Object... arguments) {
     Preconditions.checkState(parameterTypes.length == arguments.length);
-    return new SCMRatisRequest(type, operation, parameterTypes, arguments);
+    Preconditions.checkState(genericParameterTypes.length == arguments.length);
+    return new SCMRatisRequest(type, operation, parameterTypes, genericParameterTypes, arguments);
   }
 
   /**
@@ -140,6 +145,8 @@ public final class SCMRatisRequest {
 
     List<Object> args = new ArrayList<>();
     Class<?>[] parameterTypes = new Class[method.getArgsCount()];
+    Type[] genericParameterTypes = new Type[method.getArgsCount()];
+
     int paramCounter = 0;
     for (MethodArgument argument : method.getArgsList()) {
       // proto2 required-equivalent checks
@@ -151,16 +158,18 @@ public final class SCMRatisRequest {
       }
       try {
         final Class<?> clazz = ReflectionUtil.getClass(argument.getType());
-        parameterTypes[paramCounter++] = clazz;
+        parameterTypes[paramCounter] = clazz;
+        genericParameterTypes[paramCounter] = clazz;
         args.add(ScmCodecFactory.getCodec(clazz)
             .deserialize(clazz, argument.getValue()));
+        paramCounter++;
       } catch (ClassNotFoundException ex) {
         throw new InvalidProtocolBufferException(argument.getType() +
             " cannot be decoded!" + ex.getMessage());
       }
     }
     return new SCMRatisRequest(requestProto.getType(),
-        method.getName(), parameterTypes, args.toArray());
+        method.getName(), parameterTypes, genericParameterTypes, args.toArray());
   }
 
   /**
