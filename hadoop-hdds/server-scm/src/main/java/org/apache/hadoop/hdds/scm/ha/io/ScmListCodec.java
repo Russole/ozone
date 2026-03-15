@@ -64,7 +64,24 @@ public class ScmListCodec implements ScmCodec<Object> {
     if (elements.isEmpty()) {
       return EMPTY_LIST;
     }
-    final String elementType = elements.get(0).getClass().getName();
+
+    Class<?> runtimeClass = elements.get(0).getClass();
+    
+    Class<?> registeredClass = null;
+    for (Class<?> clazz : classes.values()) {
+      if (clazz.isAssignableFrom(runtimeClass)) {
+        registeredClass = clazz;
+        break;
+      }
+    }
+
+    if (registeredClass == null) {
+      throw new InvalidProtocolBufferException(
+          "Unsupported list element type: " + runtimeClass.getName());
+    }
+
+    final String elementType = registeredClass.getName();
+
     final ScmCodec<Object> elementCodec =
         ScmCodecFactory.getCodec(getClass(elementType));
     final ListArgument.Builder builder = ListArgument.newBuilder()
