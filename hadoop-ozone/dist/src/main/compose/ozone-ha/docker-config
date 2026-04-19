@@ -22,10 +22,12 @@ CORE-SITE.XML_fs.defaultFS=ofs://omservice/
 CORE-SITE.XML_fs.trash.interval=1
 
 OZONE-SITE.XML_ozone.om.service.ids=omservice
-OZONE-SITE.XML_ozone.om.nodes.omservice=om1,om2,om3
+OZONE-SITE.XML_ozone.om.nodes.omservice=om1,om2,om3,om4
 OZONE-SITE.XML_ozone.om.address.omservice.om1=om1
 OZONE-SITE.XML_ozone.om.address.omservice.om2=om2
 OZONE-SITE.XML_ozone.om.address.omservice.om3=om3
+OZONE-SITE.XML_ozone.om.address.omservice.om4=om4
+OZONE-SITE.XML_ozone.om.listener.nodes.omservice=om4
 
 OZONE-SITE.XML_ozone.scm.service.ids=scmservice
 OZONE-SITE.XML_ozone.scm.nodes.scmservice=scm1,scm2,scm3
