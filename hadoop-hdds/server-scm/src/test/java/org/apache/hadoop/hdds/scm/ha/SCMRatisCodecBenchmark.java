@@ -64,7 +64,7 @@ public class SCMRatisCodecBenchmark {
       responseValues[i] = createResponseValue(random, i);
       responseTypes[i] = responseValues[i].getClass();
       encodedResponses[i] = createReply(
-          SCMRatisResponse.encode(responseValues[i], responseTypes[i]));
+          encodeResponseValue(responseValues[i], responseTypes[i]));
     }
   }
 
@@ -81,7 +81,7 @@ public class SCMRatisCodecBenchmark {
   @Benchmark
   public Object encodeResponse() throws Exception {
     int i = next();
-    return SCMRatisResponse.encode(responseValues[i], responseTypes[i]);
+    return encodeResponseValue(responseValues[i], responseTypes[i]);
   }
 
   @Benchmark
@@ -137,5 +137,18 @@ public class SCMRatisCodecBenchmark {
         .setException(null)
         .setLogIndex(1L)
         .build();
+  }
+
+  private static Message encodeResponseValue(Object value, Class<?> type)
+      throws Exception {
+    try {
+      return (Message) SCMRatisResponse.class
+          .getMethod("encode", Object.class, Class.class)
+          .invoke(null, value, type);
+    } catch (NoSuchMethodException e) {
+      return (Message) SCMRatisResponse.class
+          .getMethod("encode", Object.class)
+          .invoke(null, value);
+    }
   }
 }
