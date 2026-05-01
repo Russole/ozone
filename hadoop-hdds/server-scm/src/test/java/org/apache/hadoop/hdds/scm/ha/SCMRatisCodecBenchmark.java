@@ -41,7 +41,6 @@ public class SCMRatisCodecBenchmark {
   private Message[] encodedRequests;
 
   private Object[] responseValues;
-  private Class<?>[] responseTypes;
   private RaftClientReply[] encodedResponses;
 
   private int index;
@@ -54,7 +53,6 @@ public class SCMRatisCodecBenchmark {
     encodedRequests = new Message[size];
 
     responseValues = new Object[size];
-    responseTypes = new Class<?>[size];
     encodedResponses = new RaftClientReply[size];
 
     for (int i = 0; i < size; i++) {
@@ -62,9 +60,8 @@ public class SCMRatisCodecBenchmark {
       encodedRequests[i] = requests[i].encode();
 
       responseValues[i] = createResponseValue(random, i);
-      responseTypes[i] = responseValues[i].getClass();
       encodedResponses[i] = createReply(
-          encodeResponseValue(responseValues[i], responseTypes[i]));
+          SCMRatisResponse.encode(responseValues[i]));
     }
   }
 
@@ -80,8 +77,7 @@ public class SCMRatisCodecBenchmark {
 
   @Benchmark
   public Object encodeResponse() throws Exception {
-    int i = next();
-    return encodeResponseValue(responseValues[i], responseTypes[i]);
+    return SCMRatisResponse.encode(responseValues[next()]);
   }
 
   @Benchmark
@@ -137,18 +133,5 @@ public class SCMRatisCodecBenchmark {
         .setException(null)
         .setLogIndex(1L)
         .build();
-  }
-
-  private static Message encodeResponseValue(Object value, Class<?> type)
-      throws Exception {
-    try {
-      return (Message) SCMRatisResponse.class
-          .getMethod("encode", Object.class, Class.class)
-          .invoke(null, value, type);
-    } catch (NoSuchMethodException e) {
-      return (Message) SCMRatisResponse.class
-          .getMethod("encode", Object.class)
-          .invoke(null, value);
-    }
   }
 }
