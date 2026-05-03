@@ -1,3 +1,20 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements. See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License. You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package org.apache.hadoop.hdds.scm.ha;
 
 import static org.apache.hadoop.hdds.protocol.proto.SCMRatisProtocol.RequestType.PIPELINE;
@@ -21,11 +38,14 @@ import org.openjdk.jmh.annotations.Measurement;
 import org.openjdk.jmh.annotations.Mode;
 import org.openjdk.jmh.annotations.OutputTimeUnit;
 import org.openjdk.jmh.annotations.Param;
+import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
-import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.Warmup;
 
+/**
+ * JMH benchmark for SCM Ratis request and response codec encode/decode.
+ */
 @State(Scope.Thread)
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.SECONDS)
@@ -36,6 +56,9 @@ public class SCMRatisCodecBenchmark {
 
   @Param({"1000"})
   private int size;
+
+  @Param({"PROTO", "LONG", "LIST_PROTO"})
+  private RequestPayloadType requestPayloadType;
 
   private SCMRatisRequest[] requests;
   private Message[] encodedRequests;
@@ -56,7 +79,7 @@ public class SCMRatisCodecBenchmark {
     encodedResponses = new RaftClientReply[size];
 
     for (int i = 0; i < size; i++) {
-      requests[i] = createRequest(random, i);
+      requests[i] = createRequest(random, requestPayloadType);
       encodedRequests[i] = requests[i].encode();
 
       responseValues[i] = createResponseValue(random, i);
@@ -86,32 +109,34 @@ public class SCMRatisCodecBenchmark {
   }
 
   private int next() {
-    index++;
-    if (index == size) {
-      index = 0;
-    }
-    return index;
+    int current = index;
+    index = (index + 1) % size;
+    return current;
   }
 
-  private static SCMRatisRequest createRequest(Random random, int i) {
-    switch (i % 3) {
-    case 0:
+  private static SCMRatisRequest createRequest(Random random, RequestPayloadType requestPayloadType) {
+    switch (requestPayloadType) {
+    case PROTO:
       HddsProtos.PipelineID pipelineId = PipelineID.randomId().getProtobuf();
       return SCMRatisRequest.of(PIPELINE, "benchmarkProto",
           new Class<?>[] {pipelineId.getClass()}, pipelineId);
 
-    case 1:
+    case LONG:
       Long value = random.nextLong();
       return SCMRatisRequest.of(PIPELINE, "benchmarkLong",
           new Class<?>[] {Long.class}, value);
 
-    default:
+    case LIST_PROTO:
       List<HddsProtos.PipelineID> pipelineIds = new ArrayList<>();
       pipelineIds.add(PipelineID.randomId().getProtobuf());
       pipelineIds.add(PipelineID.randomId().getProtobuf());
       pipelineIds.add(PipelineID.randomId().getProtobuf());
       return SCMRatisRequest.of(PIPELINE, "benchmarkList",
           new Class<?>[] {pipelineIds.getClass()}, pipelineIds);
+
+    default:
+      throw new IllegalArgumentException(
+          "Unsupported request payload type: " + requestPayloadType);
     }
   }
 
@@ -133,5 +158,14 @@ public class SCMRatisCodecBenchmark {
         .setException(null)
         .setLogIndex(1L)
         .build();
+  }
+
+  /**
+   * Request payload types used by the benchmark.
+   */
+  public enum RequestPayloadType {
+    PROTO,
+    LONG,
+    LIST_PROTO
   }
 }
