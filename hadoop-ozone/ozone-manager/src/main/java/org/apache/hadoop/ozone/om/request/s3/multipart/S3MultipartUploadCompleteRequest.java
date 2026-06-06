@@ -84,6 +84,11 @@ public class S3MultipartUploadCompleteRequest extends OMKeyRequest {
   private static final Logger LOG =
       LoggerFactory.getLogger(S3MultipartUploadCompleteRequest.class);
 
+  // CompleteMultipartUpload normally validates the client manifest by ETag.
+  // The request PartNumber selects a committed part from OM metadata, and the
+  // request ETag must match the ETag stored when UploadPart committed that
+  // part.  partName remains accepted as a compatibility fallback for older OM
+  // responses which did not persist a dedicated ETag.
   private BiFunction<OzoneManagerProtocolProtos.Part, PartKeyInfo, MultipartCommitRequestPart> eTagBasedValidator =
       (part, partKeyInfo) -> {
         String eTag = part.getETag();
@@ -288,11 +293,17 @@ public class S3MultipartUploadCompleteRequest extends OMKeyRequest {
               OMException.ResultCodes.INVALID_PART);
         }
 
-        // First Check for Invalid Part Order.
+        // Validate the client supplied manifest order before touching part
+        // data.  S3 requires strictly increasing part numbers; clients may
+        // upload parts in any order, but the CompleteMultipartUpload manifest
+        // decides the final object order.
         List< Integer > partNumbers = new ArrayList<>();
         int partsListSize = getPartsListSize(requestedVolume,
                 requestedBucket, keyName, ozoneKey, partNumbers, partsList);
 
+        // For each requested part number, load the committed part metadata,
+        // validate its ETag, enforce minimum part size for non-final parts,
+        // and collect the block locations that will become the final key.
         List<OmKeyLocationInfo> partLocationInfos = new ArrayList<>();
         long dataSize = getMultipartDataSize(requestedVolume, requestedBucket,
                 keyName, ozoneKey, partKeyInfoMap, partsListSize,
@@ -581,6 +592,9 @@ public class S3MultipartUploadCompleteRequest extends OMKeyRequest {
     partNumbers.add(prevPartNumber);
     for (int i = 1; i < partsListSize; i++) {
       int currentPartNumber = partsList.get(i).getPartNumber();
+      // Complete uses the manifest order as the final object order.  Reject
+      // duplicate or decreasing part numbers so the committed object cannot be
+      // assembled from an ambiguous or invalid part sequence.
       if (prevPartNumber >= currentPartNumber) {
         LOG.error("PartNumber at index {} is {}, and its previous " +
                 "partNumber at index {} is {} for ozonekey is " +
@@ -611,9 +625,14 @@ public class S3MultipartUploadCompleteRequest extends OMKeyRequest {
     for (OzoneManagerProtocolProtos.Part part : partsList) {
       currentPartCount++;
       int partNumber = part.getPartNumber();
+      // partNumber is client chosen during UploadPart.  Here it is used as
+      // the lookup key into OM's committed-part map for this upload ID.
       PartKeyInfo partKeyInfo = partKeyInfoMap.get(partNumber);
       MultipartCommitRequestPart requestPart = eTagBasedValidationAvailable ?
           eTagBasedValidator.apply(part, partKeyInfo) : partNameBasedValidator.apply(part, partKeyInfo);
+      // InvalidPart covers either a missing committed part or an ETag mismatch.
+      // In both cases the client manifest does not describe the MPU state that
+      // OM has recorded from previous UploadPart commits.
       if (!requestPart.isValid()) {
         throw new OMException(
             failureMessage(requestedVolume, requestedBucket, keyName) +
@@ -643,7 +662,9 @@ public class S3MultipartUploadCompleteRequest extends OMKeyRequest {
       OmKeyLocationInfoGroup currentKeyInfoGroup = currentPartKeyInfo
           .getKeyLocationVersions().get(0);
 
-      // Set partNumber in each block.
+      // These block locations are the actual uploaded bytes.  Complete does
+      // not copy bytes again; it builds the final key by concatenating the
+      // block lists from the validated parts in manifest order.
       currentKeyInfoGroup.getLocationList().forEach(
           omKeyLocationInfo -> omKeyLocationInfo.setPartNumber(partNumber));
 

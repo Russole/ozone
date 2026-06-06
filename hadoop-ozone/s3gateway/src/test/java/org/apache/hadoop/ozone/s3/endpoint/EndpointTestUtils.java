@@ -177,8 +177,15 @@ public final class EndpointTestUtils {
     return subject.delete(bucket, key);
   }
 
-  /** Initiate multipart upload.
-   * @return upload ID */
+  /**
+   * Initiate multipart upload.
+   *
+   * This is the test equivalent of AWS S3 CreateMultipartUpload.  The upload
+   * ID returned here is the session boundary for all later UploadPart,
+   * ListParts, CompleteMultipartUpload, and AbortMultipartUpload calls.
+   *
+   * @return upload ID
+   */
   public static String initiateMultipartUpload(ObjectEndpoint subject, String bucket, String key)
       throws IOException, OS3Exception {
     try (Response response = subject.initializeMultipartUpload(bucket, key)) {
@@ -190,8 +197,16 @@ public final class EndpointTestUtils {
     }
   }
 
-  /** Upload part of multipart key.
-   * @return Part to be used for completion request */
+  /**
+   * Upload part of multipart key.
+   *
+   * UploadPart is a normal HTTP PUT distinguished by uploadId and partNumber.
+   * A successful response returns an ETag.  CompleteMultipartUpload later uses
+   * the returned PartNumber + ETag pair as its manifest; it does not resend the
+   * uploaded bytes.
+   *
+   * @return Part to be used for completion request
+   */
   public static CompleteMultipartUploadRequest.Part uploadPart(
       ObjectEndpoint subject,
       String bucket,
@@ -214,7 +229,13 @@ public final class EndpointTestUtils {
     return part;
   }
 
-  /** Complete multipart upload. */
+  /**
+   * Complete multipart upload.
+   *
+   * This submits the manifest of accepted parts.  The endpoint validates the
+   * requested part numbers and ETags, then turns the in-progress MPU state into
+   * the final visible object.
+   */
   public static void completeMultipartUpload(
       ObjectEndpoint subject,
       String bucket,

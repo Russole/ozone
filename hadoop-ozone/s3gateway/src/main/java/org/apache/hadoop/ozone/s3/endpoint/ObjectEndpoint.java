@@ -204,6 +204,10 @@ public class ObjectEndpoint extends ObjectOperationHandler {
       long length = lengthHeader != null ? Long.parseLong(lengthHeader) : 0;
 
       if (uploadID != null && !uploadID.equals("")) {
+        // AWS UploadPart reuses the PUT object endpoint.  The uploadId query
+        // parameter is the protocol signal that this body is one MPU part,
+        // not a complete object PUT.  partNumber is consumed in
+        // createMultipartKey.
         if (getHeaders().getHeaderString(COPY_SOURCE_HEADER) == null) {
           context.setAction(S3GAction.CREATE_MULTIPART_KEY);
         } else {
@@ -732,6 +736,11 @@ public class ObjectEndpoint extends ObjectOperationHandler {
       OzoneBucket ozoneBucket = volume.getBucket(bucket);
       S3Owner.verifyBucketOwnerCondition(getHeaders(), bucket, ozoneBucket.getOwner());
 
+      // The CompleteMultipartUpload XML body is a manifest, not object data.
+      // Convert each <Part> entry into partNumber -> ETag while preserving
+      // client order.  Ozone Manager later validates that every requested
+      // part number exists for this upload ID and that the ETag matches the
+      // committed part.
       for (CompleteMultipartUploadRequest.Part part : partList) {
         partsMap.put(part.getPartNumber(), stripQuotes(part.getETag()));
       }
@@ -747,6 +756,9 @@ public class ObjectEndpoint extends ObjectOperationHandler {
         expectedETag = writeConditions.getExpectedETag();
       }
 
+      // Finalization is delegated to OM through the client API.  This call
+      // validates the manifest, builds the final key from the committed part
+      // block locations, and removes the in-progress MPU metadata.
       omMultipartUploadCompleteInfo = ozoneBucket.completeMultipartUpload(
           key, uploadID, partsMap, expectedDataGeneration, expectedETag);
       CompleteMultipartUploadResponse completeMultipartUploadResponse =
@@ -809,6 +821,9 @@ public class ObjectEndpoint extends ObjectOperationHandler {
     final String bucketName = ozoneBucket.getName();
     try {
       String amzDecodedLength = getHeaders().getHeaderString(DECODED_CONTENT_LENGTH_HEADER);
+      // Wrap the request body so the upload can be streamed once while still
+      // computing the digest used as the part ETag.  For regular test bodies
+      // the effective length remains the Content-Length header value.
       S3ChunkInputStreamInfo chunkInputStreamInfo = getS3ChunkInputStreamInfo(
           body, length, amzDecodedLength, key);
       multiDigestInputStream = chunkInputStreamInfo.getMultiDigestInputStream();
@@ -903,11 +918,17 @@ public class ObjectEndpoint extends ObjectOperationHandler {
       } else {
         long putLength;
         final long expectedLength = length;
+        // Open the destination stream for this specific MPU session and part.
+        // This does not create the final object yet; it writes a temporary
+        // uploaded part identified by uploadID + partNumber.
         OzoneOutputStream ozoneOutputStream = getClientProtocol()
             .createMultipartKey(volume.getName(), bucketName, key, expectedLength, partNumber, uploadID);
         try (S3ObjectWriteGuard writeGuard = new S3ObjectWriteGuard(ozoneOutputStream, expectedLength, key)) {
           metadataLatencyNs =
               getMetrics().updatePutKeyMetadataStats(startNanos);
+          // Actual UploadPart data transfer: request body -> digest wrapper ->
+          // OzoneOutputStream.  The guard also verifies the copied byte count
+          // against Content-Length before the part is committed.
           putLength = writeGuard.copyFrom(multiDigestInputStream, getIOBufferSize(expectedLength));
           byte[] digest = multiDigestInputStream.getMessageDigest(OzoneConsts.MD5_HASH).digest();
           String md5Hash = DatatypeConverter.printHexBinary(digest).toLowerCase();
@@ -921,11 +942,17 @@ public class ObjectEndpoint extends ObjectOperationHandler {
           writeGuard.getMetadata().put(OzoneConsts.ETAG, md5Hash);
           outputStream = ozoneOutputStream;
         }
+        // Closing S3ObjectWriteGuard closes the OzoneOutputStream and commits
+        // the uploaded part to the MPU state.  CompleteMultipartUpload later
+        // references this committed part by partNumber and ETag.
         getMetrics().incPutKeySuccessLength(putLength);
         perf.appendSizeBytes(putLength);
       }
       perf.appendMetaLatencyNanos(metadataLatencyNs);
 
+      // The commit result is only available after the stream is closed.  The
+      // returned ETag is the server acknowledgement that the client must echo
+      // in the CompleteMultipartUpload manifest.
       OmMultipartCommitUploadPartInfo omMultipartCommitUploadPartInfo =
           outputStream.getCommitUploadPartInfo();
       String eTag = omMultipartCommitUploadPartInfo.getETag();
