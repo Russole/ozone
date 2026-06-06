@@ -141,22 +141,40 @@ public class TestPartUpload {
   public void testLargeFileMultipartUpload(@TempDir Path tempDir) throws Exception {
     assumeFalse(enableDataStream);
     String keyName = UUID.randomUUID().toString();
+
+    // Step 1: Start the MPU session.  This corresponds to the AWS S3
+    // CreateMultipartUpload API and returns the upload ID used to bind all
+    // following part uploads to the same final object.
     String uploadID = initiateMultipartUpload(rest, OzoneConsts.S3_BUCKET,
         keyName);
+
+    // Step 2: Prepare two real files as MPU part bodies.  Each file is 5MB,
+    // which is the minimum non-final part size required by S3 semantics.
+    // Distinct byte values make the final object ordering easy to verify:
+    // part 1 should become the first 5MB, part 2 the next 5MB.
     int partSize = (int) (5 * OzoneConsts.MB);
     Path firstPartFile = tempDir.resolve("multipart-upload-part-1.bin");
     Path secondPartFile = tempDir.resolve("multipart-upload-part-2.bin");
     createFile(firstPartFile, partSize, (byte) 7);
     createFile(secondPartFile, partSize, (byte) 8);
 
+    // Step 3: Upload each part independently.  uploadFilePart opens the file
+    // as the request body, calls ObjectEndpoint.put with uploadId and
+    // partNumber query parameters, and returns the partNumber + ETag pair
+    // required by CompleteMultipartUpload.
     CompleteMultipartUploadRequest.Part firstPart = uploadFilePart(keyName,
         uploadID, 1, partSize, firstPartFile);
     CompleteMultipartUploadRequest.Part secondPart = uploadFilePart(keyName,
         uploadID, 2, partSize, secondPartFile);
 
+    // Step 4: Complete the MPU by submitting the manifest of uploaded parts.
+    // The endpoint validates the part numbers and ETags, then materializes the
+    // final object from the previously uploaded part data.
     completeMultipartUpload(rest, OzoneConsts.S3_BUCKET, keyName, uploadID,
         asList(firstPart, secondPart));
 
+    // Step 5: Read the committed object through the Ozone client and verify
+    // both the visible object size and the final byte ordering.
     OzoneBucket bucket = client.getObjectStore()
         .getS3Bucket(OzoneConsts.S3_BUCKET);
     assertEquals(2L * partSize, bucket.getKey(keyName).getDataSize());
@@ -311,23 +329,43 @@ public class TestPartUpload {
   private CompleteMultipartUploadRequest.Part uploadFilePart(String keyName,
       String uploadID, int partNumber, int contentLength, Path file)
       throws IOException, OS3Exception {
+    // CompleteMultipartUpload does not resend object bytes.  It sends a
+    // manifest containing each PartNumber and the ETag returned by UploadPart,
+    // so this helper builds that manifest entry while uploading the part.
     CompleteMultipartUploadRequest.Part part =
         new CompleteMultipartUploadRequest.Part();
+
+    // This file stream is the UploadPart request body.  putPart wires the
+    // request as:
+    //   PUT /bucket/key?uploadId=<uploadID>&partNumber=<partNumber>
+    // ObjectEndpoint.put then dispatches to createMultipartKey, where the
+    // bytes are copied into an OzoneOutputStream for this MPU part.
     try (InputStream body = Files.newInputStream(file);
          Response response = putPart(rest, OzoneConsts.S3_BUCKET, keyName,
              partNumber, uploadID, contentLength, body)) {
       assertEquals(200, response.getStatus());
+
+      // UploadPart must return an ETag.  The complete request uses this ETag
+      // to prove that the manifest references the exact part accepted by the
+      // server.
       String eTag = response.getHeaderString(OzoneConsts.ETAG);
       assertNotNull(eTag);
       part.setETag(eTag);
       part.setPartNumber(partNumber);
     }
+
+    // Check the in-progress MPU state before completion.  This verifies that
+    // the upload was recorded as a part of the upload ID, not merely accepted
+    // as a successful HTTP response.
     assertContentLength(uploadID, keyName, contentLength, partNumber);
     return part;
   }
 
   private static void assertPartContent(OzoneBucket bucket, String keyName,
       int partSize, byte... expectedValues) throws IOException {
+    // After completion, the object must be readable as one contiguous key.
+    // Reading fixed-size windows lets the test prove that complete preserved
+    // the requested part order.
     try (InputStream input = bucket.readKey(keyName)) {
       byte[] actualPart = new byte[partSize];
       for (byte expectedValue : expectedValues) {
@@ -372,9 +410,16 @@ public class TestPartUpload {
   private static Response putPart(ObjectEndpoint subject, String bucket,
       String key, int partNumber, String uploadID, long contentLength,
       InputStream body) throws IOException, OS3Exception {
+    // These query parameters are what distinguish UploadPart from a normal
+    // PutObject request.  Without them, ObjectEndpoint.put would follow the
+    // regular create-key path instead of the multipart createMultipartKey path.
     subject.queryParamsForTest().set(S3Consts.QueryParams.UPLOAD_ID, uploadID);
     subject.queryParamsForTest().setInt(S3Consts.QueryParams.PART_NUMBER,
         partNumber);
+
+    // Mock the HTTP method and Content-Length normally provided by the JAX-RS
+    // request.  createMultipartKey uses Content-Length as the expected part
+    // size while copying the request body to the OzoneOutputStream.
     when(subject.getContext().getMethod()).thenReturn(HttpMethod.PUT);
     when(subject.getHeaders().getHeaderString(HttpHeaders.CONTENT_LENGTH))
         .thenReturn(String.valueOf(contentLength));
