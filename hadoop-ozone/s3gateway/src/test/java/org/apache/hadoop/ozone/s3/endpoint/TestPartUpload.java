@@ -17,18 +17,22 @@
 
 package org.apache.hadoop.ozone.s3.endpoint;
 
+import static java.util.Arrays.asList;
 import static org.apache.hadoop.ozone.s3.endpoint.EndpointTestUtils.FailingInputStream;
 import static org.apache.hadoop.ozone.s3.endpoint.EndpointTestUtils.assertErrorResponse;
 import static org.apache.hadoop.ozone.s3.endpoint.EndpointTestUtils.assertSucceeds;
+import static org.apache.hadoop.ozone.s3.endpoint.EndpointTestUtils.completeMultipartUpload;
 import static org.apache.hadoop.ozone.s3.endpoint.EndpointTestUtils.initiateMultipartUpload;
 import static org.apache.hadoop.ozone.s3.endpoint.EndpointTestUtils.put;
 import static org.apache.hadoop.ozone.s3.util.S3Consts.DECODED_CONTENT_LENGTH_HEADER;
 import static org.apache.hadoop.ozone.s3.util.S3Consts.STORAGE_CLASS_HEADER;
 import static org.apache.hadoop.ozone.s3.util.S3Consts.X_AMZ_CONTENT_SHA256;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
@@ -39,20 +43,26 @@ import static org.mockito.Mockito.when;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.UUID;
 import java.util.stream.Stream;
 import javax.ws.rs.HttpMethod;
 import javax.ws.rs.core.HttpHeaders;
 import javax.ws.rs.core.Response;
+import org.apache.commons.io.IOUtils;
 import org.apache.hadoop.hdds.conf.OzoneConfiguration;
 import org.apache.hadoop.ozone.OzoneConfigKeys;
 import org.apache.hadoop.ozone.OzoneConsts;
 import org.apache.hadoop.ozone.client.OzoneClient;
 import org.apache.hadoop.ozone.client.OzoneClientStub;
+import org.apache.hadoop.ozone.client.OzoneBucket;
 import org.apache.hadoop.ozone.client.OzoneMultipartUploadPartListParts;
 import org.apache.hadoop.ozone.s3.exception.OS3Exception;
 import org.apache.hadoop.ozone.s3.exception.S3ErrorTable;
@@ -60,6 +70,7 @@ import org.apache.hadoop.ozone.s3.util.S3Consts;
 import org.apache.hadoop.ozone.s3.util.S3StorageType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.Parameter;
 import org.junit.jupiter.params.ParameterizedClass;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -124,6 +135,32 @@ public class TestPartUpload {
       assertNotNull(newETag);
       assertNotEquals(eTag, newETag);
     }
+  }
+
+  @Test
+  public void testLargeFileMultipartUpload(@TempDir Path tempDir) throws Exception {
+    assumeFalse(enableDataStream);
+    String keyName = UUID.randomUUID().toString();
+    String uploadID = initiateMultipartUpload(rest, OzoneConsts.S3_BUCKET,
+        keyName);
+    int partSize = (int) (5 * OzoneConsts.MB);
+    Path firstPartFile = tempDir.resolve("multipart-upload-part-1.bin");
+    Path secondPartFile = tempDir.resolve("multipart-upload-part-2.bin");
+    createFile(firstPartFile, partSize, (byte) 7);
+    createFile(secondPartFile, partSize, (byte) 8);
+
+    CompleteMultipartUploadRequest.Part firstPart = uploadFilePart(keyName,
+        uploadID, 1, partSize, firstPartFile);
+    CompleteMultipartUploadRequest.Part secondPart = uploadFilePart(keyName,
+        uploadID, 2, partSize, secondPartFile);
+
+    completeMultipartUpload(rest, OzoneConsts.S3_BUCKET, keyName, uploadID,
+        asList(firstPart, secondPart));
+
+    OzoneBucket bucket = client.getObjectStore()
+        .getS3Bucket(OzoneConsts.S3_BUCKET);
+    assertEquals(2L * partSize, bucket.getKey(keyName).getDataSize());
+    assertPartContent(bucket, keyName, partSize, (byte) 7, (byte) 8);
   }
 
   @Test
@@ -271,14 +308,65 @@ public class TestPartUpload {
         () -> put(endpoint, OzoneConsts.S3_BUCKET, OzoneConsts.KEY, 1, uploadID, content));
   }
 
+  private CompleteMultipartUploadRequest.Part uploadFilePart(String keyName,
+      String uploadID, int partNumber, int contentLength, Path file)
+      throws IOException, OS3Exception {
+    CompleteMultipartUploadRequest.Part part =
+        new CompleteMultipartUploadRequest.Part();
+    try (InputStream body = Files.newInputStream(file);
+         Response response = putPart(rest, OzoneConsts.S3_BUCKET, keyName,
+             partNumber, uploadID, contentLength, body)) {
+      assertEquals(200, response.getStatus());
+      String eTag = response.getHeaderString(OzoneConsts.ETAG);
+      assertNotNull(eTag);
+      part.setETag(eTag);
+      part.setPartNumber(partNumber);
+    }
+    assertContentLength(uploadID, keyName, contentLength, partNumber);
+    return part;
+  }
+
+  private static void assertPartContent(OzoneBucket bucket, String keyName,
+      int partSize, byte... expectedValues) throws IOException {
+    try (InputStream input = bucket.readKey(keyName)) {
+      byte[] actualPart = new byte[partSize];
+      for (byte expectedValue : expectedValues) {
+        IOUtils.readFully(input, actualPart);
+        byte[] expectedPart = new byte[partSize];
+        Arrays.fill(expectedPart, expectedValue);
+        assertArrayEquals(expectedPart, actualPart);
+      }
+      assertEquals(-1, input.read());
+    }
+  }
+
+  private static void createFile(Path file, int size, byte value)
+      throws IOException {
+    byte[] buffer = new byte[8192];
+    Arrays.fill(buffer, value);
+    int remaining = size;
+    try (OutputStream output = Files.newOutputStream(file)) {
+      while (remaining > 0) {
+        int bytesToWrite = Math.min(remaining, buffer.length);
+        output.write(buffer, 0, bytesToWrite);
+        remaining -= bytesToWrite;
+      }
+    }
+  }
+
   private void assertContentLength(String uploadID, String key,
       long contentLength) throws IOException {
+    assertContentLength(uploadID, key, contentLength, 1);
+  }
+
+  private void assertContentLength(String uploadID, String key,
+      long contentLength, int partNumber) throws IOException {
     OzoneMultipartUploadPartListParts parts =
         client.getObjectStore().getS3Bucket(OzoneConsts.S3_BUCKET)
             .listParts(key, uploadID, 0, 100);
-    assertEquals(1, parts.getPartInfoList().size());
+    assertEquals(partNumber, parts.getPartInfoList().size());
     assertEquals(contentLength,
-        parts.getPartInfoList().get(0).getSize());
+        parts.getPartInfoList().get(partNumber - 1).getSize());
   }
 
   private static Response putPart(ObjectEndpoint subject, String bucket,
