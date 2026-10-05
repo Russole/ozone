@@ -15,42 +15,31 @@
  * limitations under the License.
  */
 
-package org.apache.hadoop.hdds.scm;
+package org.apache.hadoop.hdds.scm.container;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.apache.hadoop.hdds.client.RatisReplicationConfig;
 import org.apache.hadoop.hdds.conf.OzoneConfiguration;
 import org.apache.hadoop.hdds.protocol.DatanodeDetails;
-import org.apache.hadoop.hdds.protocol.proto.HddsProtos;
 import org.apache.hadoop.hdds.protocol.proto.HddsProtos.ReplicationFactor;
-import org.apache.hadoop.hdds.scm.container.ContainerID;
-import org.apache.hadoop.hdds.scm.container.ContainerInfo;
-import org.apache.hadoop.hdds.scm.container.ContainerReplica;
+import org.apache.hadoop.hdds.scm.PlacementPolicy;
+import org.apache.hadoop.hdds.scm.ScmConfigKeys;
 import org.apache.hadoop.hdds.scm.node.NodeManager;
 import org.apache.hadoop.hdds.scm.pipeline.Pipeline;
 import org.apache.hadoop.hdds.scm.server.StorageContainerManager;
 import org.apache.hadoop.net.NetworkTopology;
 import org.apache.hadoop.net.StaticMapping;
 import org.apache.hadoop.ozone.MiniOzoneCluster;
-import org.apache.hadoop.ozone.client.ObjectStore;
-import org.apache.hadoop.ozone.client.OzoneBucket;
-import org.apache.hadoop.ozone.client.OzoneClient;
-import org.apache.hadoop.ozone.client.OzoneVolume;
-import org.apache.hadoop.ozone.client.io.OzoneOutputStream;
-import org.apache.ozone.test.GenericTestUtils;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Nested;
@@ -80,7 +69,7 @@ public class TestRackAwarePlacement {
       "host3.test", "host4.test", "host5.test"
   };
 
-  private static void applyReplicationSpeedupConfig(OzoneConfiguration conf) {
+  public static void applyReplicationSpeedupConfig(OzoneConfiguration conf) {
     conf.setTimeDuration(ScmConfigKeys.OZONE_SCM_HEARTBEAT_PROCESS_INTERVAL,
         100, TimeUnit.MILLISECONDS);
     conf.setTimeDuration(ScmConfigKeys.OZONE_SCM_STALENODE_INTERVAL,
@@ -108,8 +97,7 @@ public class TestRackAwarePlacement {
 
   @ParameterizedTest
   @MethodSource("rackAwarePolicies")
-  void testContainerPlacementWithPolicy(
-      String placementClassName) throws Exception {
+  void testContainerPlacementWithPolicy(String placementClassName) throws Exception {
     OzoneConfiguration conf = new OzoneConfiguration();
     conf.set(ScmConfigKeys.OZONE_SCM_CONTAINER_PLACEMENT_IMPL_KEY,
         placementClassName);
@@ -129,7 +117,6 @@ public class TestRackAwarePlacement {
           "Placement policy was not set correctly");
 
       assertPipelinesSpanMultipleRacks(cluster);
-      assertContainerReplicationIsRackAware(cluster);
     }
 
     assertTrue(new StaticMapping().getSwitchMap().isEmpty(),
@@ -171,16 +158,6 @@ public class TestRackAwarePlacement {
     void testDatanodesHaveCorrectHostname() {
       assertHostnameAssignments(cluster, HOSTS);
     }
-
-    @Test
-    void testRatisPipelineSpansMultipleRacks() {
-      assertPipelinesSpanMultipleRacks(cluster);
-    }
-
-    @Test
-    void testContainerReplicationIsRackAware() throws Exception {
-      assertContainerReplicationIsRackAware(cluster);
-    }
   }
 
   @Nested
@@ -216,11 +193,6 @@ public class TestRackAwarePlacement {
     @Test
     void testRatisPipelineSpansMultipleRacks() {
       assertPipelinesSpanMultipleRacks(cluster);
-    }
-
-    @Test
-    void testContainerReplicationIsRackAware() throws Exception {
-      assertContainerReplicationIsRackAware(cluster);
     }
   }
 
@@ -265,101 +237,6 @@ public class TestRackAwarePlacement {
                 + " should be in default rack when no racks are configured");
       }
     }
-  }
-
-  private static void assertContainerReplicationIsRackAware(
-      MiniOzoneCluster cluster) throws Exception {
-    StorageContainerManager scm = cluster.getStorageContainerManager();
-
-    try (OzoneClient client = cluster.newClient()) {
-      ObjectStore store = client.getObjectStore();
-      store.createVolume("testvol");
-      OzoneVolume volume = store.getVolume("testvol");
-      volume.createBucket("testbucket");
-      OzoneBucket bucket = volume.getBucket("testbucket");
-
-      byte[] data = "test-data".getBytes(StandardCharsets.UTF_8);
-      try (OzoneOutputStream out = bucket.createKey(
-          "testkey", data.length,
-          RatisReplicationConfig.getInstance(ReplicationFactor.THREE),
-          new HashMap<>())) {
-        out.write(data);
-      }
-    }
-
-    ContainerInfo targetContainer = null;
-    Set<ContainerReplica> replicas = null;
-    for (ContainerInfo c : scm.getContainerManager().getContainers()) {
-      Set<ContainerReplica> r =
-          scm.getContainerManager().getContainerReplicas(c.containerID());
-      // Start with a normally replicated container so stopping one datanode
-      // must trigger creation of a replacement replica.
-      if (r.size() == 3) {
-        targetContainer = c;
-        replicas = r;
-        break;
-      }
-    }
-    assertNotNull(targetContainer,
-        "Should find a container with 3 replicas");
-    ContainerID containerID = targetContainer.containerID();
-
-    DatanodeDetails stoppedDn =
-        replicas.iterator().next().getDatanodeDetails();
-    cluster.shutdownHddsDatanode(stoppedDn);
-
-    GenericTestUtils.waitFor(() -> {
-      try {
-        return scm.getScmNodeManager()
-            .getNodeStatus(stoppedDn)
-            .getHealth() == HddsProtos.NodeState.DEAD;
-      } catch (Exception e) {
-        return false;
-      }
-    }, 500, 30_000);
-
-    waitForRackAwareReplication(scm, containerID, stoppedDn);
-
-    Set<String> racks = getReplicaRacks(scm.getContainerManager()
-        .getContainerReplicas(containerID));
-
-    assertTrue(racks.size() >= 2,
-        "Container replicas after re-replication should span at least "
-            + "2 racks, but were on: " + racks);
-  }
-
-  private static void waitForRackAwareReplication(
-      StorageContainerManager scm, ContainerID containerID,
-      DatanodeDetails stoppedDn)
-      throws TimeoutException, InterruptedException {
-    GenericTestUtils.waitFor(() -> {
-      try {
-        Set<ContainerReplica> current = scm.getContainerManager()
-            .getContainerReplicas(containerID);
-
-        // Starting with exactly 3 replicas ensures that removing the dead
-        // replica requires a replacement. Use >= here to allow temporary
-        // over-replication while placement repair converges.
-        boolean deadReplicaRemoved = current.stream()
-            .noneMatch(replica -> stoppedDn.equals(
-                replica.getDatanodeDetails()));
-        boolean replicaCountRestored = current.size() >= 3;
-        boolean rackAware = getReplicaRacks(current).size() >= 2;
-
-        // Replica reports and placement repair are asynchronous. Wait for the
-        // replacement and the resulting rack-aware placement to be visible.
-        return deadReplicaRemoved && replicaCountRestored && rackAware;
-      } catch (Exception e) {
-        return false;
-      }
-    }, 1_000, 60_000);
-  }
-
-  private static Set<String> getReplicaRacks(
-      Set<ContainerReplica> replicas) {
-    return replicas.stream()
-        .map(replica -> replica.getDatanodeDetails().getNetworkLocation())
-        .collect(Collectors.toSet());
   }
 
   private void assertRackAssignments(MiniOzoneCluster cluster,

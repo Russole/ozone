@@ -23,8 +23,6 @@ import static org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos.Con
 import static org.apache.hadoop.hdds.protocol.proto.HddsProtos.ReplicationFactor.THREE;
 import static org.apache.hadoop.hdds.scm.ScmConfigKeys.OZONE_SCM_CONTAINER_PLACEMENT_EC_IMPL_KEY;
 import static org.apache.hadoop.hdds.scm.ScmConfigKeys.OZONE_SCM_CONTAINER_PLACEMENT_IMPL_KEY;
-import static org.apache.hadoop.hdds.scm.ScmConfigKeys.OZONE_SCM_DEADNODE_INTERVAL;
-import static org.apache.hadoop.hdds.scm.ScmConfigKeys.OZONE_SCM_STALENODE_INTERVAL;
 import static org.apache.hadoop.ozone.container.OzoneTestHelper.isContainerClosed;
 import static org.apache.hadoop.ozone.container.OzoneTestHelper.waitForContainerClose;
 import static org.apache.hadoop.ozone.container.OzoneTestHelper.waitForReplicaCount;
@@ -38,11 +36,11 @@ import static org.mockito.Mockito.any;
 import com.google.common.base.Functions;
 import com.google.common.collect.ImmutableMap;
 import java.io.IOException;
-import java.time.Duration;
 import java.util.Arrays;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
@@ -55,12 +53,14 @@ import org.apache.hadoop.hdds.conf.OzoneConfiguration;
 import org.apache.hadoop.hdds.protocol.DatanodeDetails;
 import org.apache.hadoop.hdds.protocol.datanode.proto.ContainerProtos;
 import org.apache.hadoop.hdds.scm.PlacementPolicy;
+import org.apache.hadoop.hdds.scm.container.ContainerID;
+import org.apache.hadoop.hdds.scm.container.ContainerReplica;
+import org.apache.hadoop.hdds.scm.container.TestRackAwarePlacement;
 import org.apache.hadoop.hdds.scm.container.placement.algorithms.SCMContainerPlacementCapacity;
 import org.apache.hadoop.hdds.scm.container.placement.algorithms.SCMContainerPlacementMetrics;
 import org.apache.hadoop.hdds.scm.container.placement.algorithms.SCMContainerPlacementRackAware;
 import org.apache.hadoop.hdds.scm.container.placement.algorithms.SCMContainerPlacementRackScatter;
 import org.apache.hadoop.hdds.scm.container.placement.algorithms.SCMContainerPlacementRandom;
-import org.apache.hadoop.hdds.scm.container.replication.ReplicationManager.ReplicationManagerConfiguration;
 import org.apache.hadoop.hdds.scm.storage.ContainerProtocolCalls;
 import org.apache.hadoop.ozone.DataTestUtil;
 import org.apache.hadoop.ozone.HddsDatanodeService;
@@ -94,9 +94,14 @@ class TestContainerReplication {
   private static final String VOLUME = "vol1";
   private static final String BUCKET = "bucket1";
   private static final String KEY = "key1";
+  private static final String[] RACKS = {
+      "/rack0", "/rack0", "/rack0",
+      "/rack1", "/rack1", "/rack1"
+  };
   private static final List<Class<? extends PlacementPolicy>> POLICIES = asList(
       SCMContainerPlacementCapacity.class,
       SCMContainerPlacementRackAware.class,
+      SCMContainerPlacementRackScatter.class,
       SCMContainerPlacementRandom.class
   );
 
@@ -119,16 +124,26 @@ class TestContainerReplication {
    * Verifies that a closed RATIS THREE container which becomes under-replicated
    * after a datanode shutdown is restored to three replicas by ReplicationManager,
    * and that the configured placement policy records the datanode-choose metrics.
+   * Rack-aware policies also verify that replacement replicas span multiple racks.
    * Runs once per placement policy in {@link #containerReplicationArguments()}.
    */
   @ParameterizedTest
   @MethodSource("containerReplicationArguments")
   void testRatisContainerReReplicationAfterDatanodeShutdown(String placementPolicyClass) throws Exception {
-
     OzoneConfiguration conf = createConfiguration();
     conf.set(OZONE_SCM_CONTAINER_PLACEMENT_IMPL_KEY, placementPolicyClass);
-    try (MiniOzoneCluster cluster = MiniOzoneCluster.newBuilder(conf).setNumDatanodes(5).build()) {
+    boolean rackAwarePolicy = isRackAwarePolicy(placementPolicyClass);
+    MiniOzoneCluster.Builder clusterBuilder = MiniOzoneCluster.newBuilder(conf)
+        .setNumDatanodes(rackAwarePolicy ? RACKS.length : 5);
+    if (rackAwarePolicy) {
+      clusterBuilder.setRacks(RACKS);
+    }
+
+    try (MiniOzoneCluster cluster = clusterBuilder.build()) {
       cluster.waitForClusterToBeReady();
+      if (rackAwarePolicy) {
+        cluster.waitForPipelineTobeReady(THREE, 60_000);
+      }
       SCMContainerPlacementMetrics metrics = cluster.getStorageContainerManager().getPlacementMetrics();
       try (OzoneClient client = cluster.newClient()) {
         createTestData(client);
@@ -146,6 +161,9 @@ class TestContainerReplication {
         waitForReplicaCount(containerID, 2, cluster);
 
         waitForReplicaCount(containerID, 3, cluster);
+        if (rackAwarePolicy) {
+          assertContainerReplicasSpanMultipleRacks(cluster, containerID, placementPolicyClass);
+        }
 
         Supplier<String> messageSupplier = () -> "policy=" + placementPolicyClass;
         assertEquals(datanodeRequestCount + 1, metrics.getDatanodeRequestCount(), messageSupplier);
@@ -156,17 +174,28 @@ class TestContainerReplication {
     }
   }
 
+  private static boolean isRackAwarePolicy(String placementPolicyClass) {
+    return placementPolicyClass.equals(SCMContainerPlacementRackAware.class.getCanonicalName())
+        || placementPolicyClass.equals(SCMContainerPlacementRackScatter.class.getCanonicalName());
+  }
+
+  private static void assertContainerReplicasSpanMultipleRacks(
+      MiniOzoneCluster cluster, long containerID, String placementPolicyClass) throws IOException {
+    Set<ContainerReplica> replicas = cluster.getStorageContainerManager()
+        .getContainerManager()
+        .getContainerReplicas(ContainerID.valueOf(containerID));
+    Set<String> racks = replicas.stream()
+        .map(replica -> replica.getDatanodeDetails().getNetworkLocation())
+        .collect(Collectors.toSet());
+
+    assertThat(racks)
+        .as("Container replicas for policy %s should span multiple racks", placementPolicyClass)
+        .hasSizeGreaterThanOrEqualTo(2);
+  }
+
   private static OzoneConfiguration createConfiguration() {
     OzoneConfiguration conf = new OzoneConfiguration();
-    conf.setTimeDuration(OZONE_SCM_STALENODE_INTERVAL, 3, TimeUnit.SECONDS);
-    conf.setTimeDuration(OZONE_SCM_DEADNODE_INTERVAL, 6, TimeUnit.SECONDS);
-
-    ReplicationManagerConfiguration repConf =
-        conf.getObject(ReplicationManagerConfiguration.class);
-    repConf.setInterval(Duration.ofSeconds(1));
-    repConf.setUnderReplicatedInterval(Duration.ofSeconds(1));
-    conf.setFromObject(repConf);
-
+    TestRackAwarePlacement.applyReplicationSpeedupConfig(conf);
     return conf;
   }
 
