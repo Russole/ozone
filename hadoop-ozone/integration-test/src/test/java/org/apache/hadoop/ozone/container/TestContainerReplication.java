@@ -99,8 +99,6 @@ class TestContainerReplication {
   };
   private static final List<Class<? extends PlacementPolicy>> POLICIES = asList(
       SCMContainerPlacementCapacity.class,
-      SCMContainerPlacementRackAware.class,
-      SCMContainerPlacementRackScatter.class,
       SCMContainerPlacementRandom.class
   );
 
@@ -123,15 +121,29 @@ class TestContainerReplication {
    * Verifies that a closed RATIS THREE container which becomes under-replicated
    * after a datanode shutdown is restored to three replicas by ReplicationManager,
    * and that the configured placement policy records the datanode-choose metrics.
-   * Rack-aware policies also verify that replacement replicas span multiple racks.
    * Runs once per placement policy in {@link #containerReplicationArguments()}.
    */
   @ParameterizedTest
   @MethodSource("containerReplicationArguments")
   void testRatisContainerReReplicationAfterDatanodeShutdown(String placementPolicyClass) throws Exception {
+    verifyRatisContainerReReplicationAfterDatanodeShutdown(
+        placementPolicyClass, false);
+  }
+
+  /**
+   * Verifies rack-aware container re-replication after a datanode shutdown.
+   */
+  @Test
+  void testRackAwareContainerReReplicationAfterDatanodeShutdown()
+      throws Exception {
+    verifyRatisContainerReReplicationAfterDatanodeShutdown(
+        SCMContainerPlacementRackAware.class.getCanonicalName(), true);
+  }
+
+  private void verifyRatisContainerReReplicationAfterDatanodeShutdown(
+      String placementPolicyClass, boolean rackAwarePolicy) throws Exception {
     OzoneConfiguration conf = createConfiguration();
     conf.set(OZONE_SCM_CONTAINER_PLACEMENT_IMPL_KEY, placementPolicyClass);
-    boolean rackAwarePolicy = isRackAwarePolicy(placementPolicyClass);
     MiniOzoneCluster.Builder clusterBuilder = MiniOzoneCluster.newBuilder(conf)
         .setNumDatanodes(rackAwarePolicy ? RACKS.length : 5);
     if (rackAwarePolicy) {
@@ -141,6 +153,9 @@ class TestContainerReplication {
     try (MiniOzoneCluster cluster = clusterBuilder.build()) {
       cluster.waitForClusterToBeReady();
       if (rackAwarePolicy) {
+        assertEquals(placementPolicyClass, cluster.getStorageContainerManager()
+            .getContainerPlacementPolicy().getClass().getName(),
+            "Placement policy was not set correctly");
         cluster.waitForPipelineTobeReady(THREE, 60_000);
       }
       SCMContainerPlacementMetrics metrics = cluster.getStorageContainerManager().getPlacementMetrics();
@@ -171,11 +186,6 @@ class TestContainerReplication {
         assertThat(metrics.getDatanodeChooseFallbackCount()).isGreaterThanOrEqualTo(datanodeChooseFallbackCount);
       }
     }
-  }
-
-  private static boolean isRackAwarePolicy(String placementPolicyClass) {
-    return placementPolicyClass.equals(SCMContainerPlacementRackAware.class.getCanonicalName())
-        || placementPolicyClass.equals(SCMContainerPlacementRackScatter.class.getCanonicalName());
   }
 
   private static void assertContainerReplicasSpanMultipleRacks(

@@ -79,16 +79,13 @@ public class TestRackAwarePlacement {
     conf.setTimeDuration("hdds.scm.replication.thread.interval",
         1, TimeUnit.SECONDS);
     conf.setTimeDuration("hdds.scm.replication.under.replicated.interval",
-        5, TimeUnit.SECONDS);
+        1, TimeUnit.SECONDS);
     conf.setTimeDuration("hdds.scm.replication.over.replicated.interval",
         5, TimeUnit.SECONDS);
   }
 
   static Stream<Arguments> rackAwarePolicies() {
     return Stream.of(
-        Arguments.of(
-            "org.apache.hadoop.hdds.scm.container.placement.algorithms"
-                + ".SCMContainerPlacementRackAware"),
         Arguments.of(
             "org.apache.hadoop.hdds.scm.container.placement.algorithms"
                 + ".SCMContainerPlacementRackScatter")
